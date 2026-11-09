@@ -15,6 +15,7 @@ namespace
     constexpr unsigned kDefinitionEnabled = 0x00800000;
     constexpr unsigned kMaxOrders = 8192;
     constexpr int kMohoFootprint = 5;
+    constexpr unsigned kFeedbackTicks = 45;
     thread_local bool checkingSite = false;
 
     struct SiteProbe
@@ -73,9 +74,22 @@ namespace
     {
         UnitStruct* constructor;
         UnitStruct* target;
+        const char* replacement;
         int type;
         Position_Dword buildPos;
     };
+
+    // Keep a description of the order, not a pointer to an engine allocation.
+    struct Feedback
+    {
+        const TAdynmemStruct* world;
+        unsigned constructorSlot;
+        short constructorType;
+        unsigned action;
+        unsigned start;
+        int type;
+        Position_Dword position;
+    } feedback = {};
 
     struct UpgradePair
     {
@@ -106,14 +120,18 @@ namespace
         return selected;
     }
 
-    int FindReplacement(const TAdynmemStruct& ta, const UnitDefStruct& oldDef,
-        const UnitDefStruct& constructor)
+    const char* ReplacementName(const UnitDefStruct& oldDef)
     {
-        const char* name = nullptr;
         for (const auto& pair : kUpgrades)
             if (_strnicmp(oldDef.UnitName, pair.from, sizeof(oldDef.UnitName)) == 0)
-                name = pair.to;
-        if (!name || !constructor.CANBUILD_ptr || constructor.canbuildCount <= 0
+                return pair.to;
+        return nullptr;
+    }
+
+    int FindReplacement(const TAdynmemStruct& ta, const UnitDefStruct& oldDef,
+        const UnitDefStruct& constructor, const char* name)
+    {
+        if (!constructor.CANBUILD_ptr || constructor.canbuildCount <= 0
             || static_cast<unsigned>(constructor.canbuildCount) > ta.UNITINFOCount) return 0;
 
         for (int i = 0; i < constructor.canbuildCount; ++i)
@@ -138,16 +156,23 @@ namespace
         return true;
     }
 
-    bool CheckReplacementSite(const TAdynmemStruct& ta, PlayerStruct& owner,
-        const UnitStruct& old, unsigned slot, const UnitDefStruct& def, Position_Dword& position)
+    bool ReplacementTile(const UnitStruct& old, const UnitDefStruct& def, int& left, int& top)
     {
-        if (!def.YardMap || def.FootX != kMohoFootprint || def.FootY != kMohoFootprint)
-            return false;
+        if (def.FootX != kMohoFootprint || def.FootY != kMohoFootprint) return false;
         // Same grid rounding as GUI_IssueMobileBuildOrder, starting from the old center.
         const int x = static_cast<int>(old.XPos) + 8 - def.FootX * 8;
         const int y = static_cast<int>(old.YPos) + 8 - def.FootY * 8;
         if (x < 0 || y < 0) return false;
-        const int left = x / 16, top = y / 16;
+        left = x / 16;
+        top = y / 16;
+        return true;
+    }
+
+    bool CheckReplacementSite(const TAdynmemStruct& ta, PlayerStruct& owner,
+        const UnitStruct& old, unsigned slot, const UnitDefStruct& def, Position_Dword& position)
+    {
+        int left, top;
+        if (!def.YardMap || !ReplacementTile(old, def, left, top)) return false;
         if (left + def.FootX > ta.FeatureMapSizeX || top + def.FootY > ta.FeatureMapSizeY)
             return false;
 
@@ -191,7 +216,7 @@ namespace
         return canReclaim(constructor, target) != 0;
     }
 
-    bool FindUpgrade(TAdynmemStruct* ta, Upgrade& upgrade, bool reportBlocked)
+    bool FindUpgradeTarget(TAdynmemStruct* ta, Upgrade& upgrade)
     {
         if (!ta || !DataShare || DataShare->TAProgress != TAInGame || DataShare->PlayingDemo
             || ta->PrepareOrder_Type != ordertype::STOP || (ta->BuildSpotState & 10) != 2) return false;
@@ -211,23 +236,34 @@ namespace
         if (!LiveOwned(target, owner) || static_cast<unsigned short>(target.UnitInGameIndex) != slot
             || target.Nanoframe != 0.0f || target.UnitType->bmcode != 0 || target.UnitType->extractsmetal <= 0)
             return false;
+        const char* replacement = ReplacementName(*target.UnitType);
+        if (!replacement) return false;
         auto* constructor = SingleSelectedUnit(owner);
         if (!constructor || constructor == &target || !constructor->IsUnit || constructor->Nanoframe != 0.0f
             || !(constructor->UnitType->UnitTypeMask_0 & builder) || constructor->UnitType->bmcode == 0)
             return false;
 
-        const int type = FindReplacement(*ta, *target.UnitType, *constructor->UnitType);
-        if (!type || !CanReclaim(constructor, &target)) return false;
-        const auto& def = ta->UnitDef[type];
+        upgrade = {constructor, &target, replacement, 0, {}};
+        return true;
+    }
+
+    bool PrepareUpgrade(TAdynmemStruct& ta, Upgrade& upgrade, bool reportBlocked)
+    {
+        auto& target = *upgrade.target;
+        auto& constructor = *upgrade.constructor;
+        auto& owner = *target.Owner_PlayerPtr0;
+        const int type = FindReplacement(ta, *target.UnitType, *constructor.UnitType, upgrade.replacement);
+        if (!type || !CanReclaim(&constructor, &target)) return false;
+        const auto& def = ta.UnitDef[type];
         if (!UnderBuildLimit(owner, type, def.buildLimit)) return false;
-        Position_Dword buildPos = {};
-        if (!CheckReplacementSite(*ta, owner, target, slot, def, buildPos))
+        const unsigned slot = static_cast<unsigned short>(target.UnitInGameIndex);
+        if (!CheckReplacementSite(ta, owner, target, slot, def, upgrade.buildPos))
         {
             if (reportBlocked)
                 IDDrawSurface::OutptFmtTxt("[MexUpgrade] replacement site blocked: extractor=%u build=%d", slot, type);
             return false;
         }
-        upgrade = {constructor, &target, type, buildPos};
+        upgrade.type = type;
         return true;
     }
 
@@ -242,6 +278,16 @@ namespace
     // ORDERS_NewMainOrder2Unit, also used by native GUI_IssueMobileBuildOrder.
     using Dispatch = void (__stdcall*)(unsigned, int, UnitStruct*, UnitStruct*, const Position_Dword*, int, int);
     const auto Send = reinterpret_cast<Dispatch>(0x0043AFC0u);
+    const auto Remove = reinterpret_cast<void (__stdcall*)(UnitStruct*, UnitOrdersStruct*)>(0x00439F80u);
+
+    struct Actions { unsigned reclaim, build; };
+
+    Actions UpgradeActions(const UnitStruct& constructor)
+    {
+        const bool air = (constructor.UnitType->UnitTypeMask_0 & canfly) != 0;
+        return {ActionIndex(air ? "VTOL_RECLAIMUNIT" : "RECLAIMUNIT"),
+            ActionIndex(air ? "VTOL_MOBILEBUILD" : "MOBILEBUILD")};
+    }
 
     UnitOrdersStruct* FindReclaim(const UnitStruct& constructor, unsigned action, const UnitStruct& target)
     {
@@ -257,16 +303,48 @@ namespace
             && order->Pos.X == position.X && order->Pos.Y == position.Y && order->Pos.Z == position.Z;
     }
 
-    bool QueueUpgrade(UnitStruct& constructor, UnitStruct& target, int type,
-        const Position_Dword& buildPos, bool shift)
+    bool IsReplacementBuild(const TAdynmemStruct& ta, const UnitOrdersStruct& build,
+        const UnitStruct& target, const char* replacement)
     {
-        const bool air = (constructor.UnitType->UnitTypeMask_0 & canfly) != 0;
-        const unsigned reclaim = ActionIndex(air ? "VTOL_RECLAIMUNIT" : "RECLAIMUNIT");
-        const unsigned build = ActionIndex(air ? "VTOL_MOBILEBUILD" : "MOBILEBUILD");
-        if (!reclaim || !build) return false;
+        if (!ta.UnitDef || !build.BuildUnitID || build.BuildUnitID >= ta.UNITINFOCount
+            || build.State != 0 || build.AttackTargat) return false;
+        const auto& def = ta.UnitDef[build.BuildUnitID];
+        if (_strnicmp(def.UnitName, replacement, sizeof(def.UnitName)) != 0) return false;
+        int left, top;
+        return ReplacementTile(target, def, left, top)
+            && build.Pos.X == left * 16 + def.FootX * 8 && build.Pos.Y == top * 16 + def.FootY * 8
+            && build.Pos.x_ == 0 && build.Pos.y_ == 0;
+    }
 
-        // Shift dispatch toggles a matching order. Don't turn repeated clicks into
-        // cancellation or issue a reclaim when a nearby build would be toggled off.
+    bool CancelUpgrade(TAdynmemStruct& ta, const Upgrade& upgrade, Actions actions)
+    {
+        auto& constructor = *upgrade.constructor;
+        auto* reclaim = FindReclaim(constructor, actions.reclaim, *upgrade.target);
+        auto* build = reclaim ? reclaim->NextOrder : nullptr;
+        if (!build || reclaim->Unit_ptr != &constructor || build->Unit_ptr != &constructor
+            || build->COBHandler_index != actions.build
+            || !IsReplacementBuild(ta, *build, *upgrade.target, upgrade.replacement)) return false;
+
+        // Remove the exact native nodes. The usual Shift toggle matches build
+        // positions within one tile and could cancel an unrelated nearby order.
+        Remove(&constructor, build);
+        Remove(&constructor, reclaim);
+        IDDrawSurface::OutptFmtTxt("[MexUpgrade] cancelled builder=%u extractor=%u",
+            static_cast<unsigned short>(constructor.UnitInGameIndex),
+            static_cast<unsigned short>(upgrade.target->UnitInGameIndex));
+        return true;
+    }
+
+    bool QueueUpgrade(TAdynmemStruct& ta, const Upgrade& upgrade, Actions actions, bool shift)
+    {
+        auto& constructor = *upgrade.constructor;
+        auto& target = *upgrade.target;
+        const int type = upgrade.type;
+        const auto& buildPos = upgrade.buildPos;
+        const unsigned reclaim = actions.reclaim, build = actions.build;
+
+        // Exact upgrade pairs are cancelled before we get here. A nearby
+        // independent build can still toggle off in the native dispatcher.
         unsigned scanned = 0;
         for (auto* order = constructor.UnitOrders; order; order = order->NextOrder)
         {
@@ -289,6 +367,8 @@ namespace
         order = FindReclaim(constructor, reclaim, target);
         if (order && IsBuildAt(order->NextOrder, build, type, buildPos))
         {
+            feedback = {&ta, static_cast<unsigned short>(constructor.UnitInGameIndex),
+                constructor.UnitID, build, order->NextOrder->StartTime, type, buildPos};
             IDDrawSurface::OutptFmtTxt("[MexUpgrade] queued builder=%u extractor=%u build=%d shift=%d",
                 static_cast<unsigned short>(constructor.UnitInGameIndex),
                 static_cast<unsigned short>(target.UnitInGameIndex), type, shift);
@@ -297,15 +377,14 @@ namespace
 
         // Both commands run on the UI thread before the engine executes an order.
         // If the build didn't follow reclaim, remove the orders this click added.
-        const auto remove = reinterpret_cast<void (__stdcall*)(UnitStruct*, UnitOrdersStruct*)>(0x00439F80u);
         scanned = 0;
         for (auto* queued = constructor.UnitOrders; queued && scanned++ < kMaxOrders; queued = queued->NextOrder)
         {
             if (!IsBuildAt(queued, build, type, buildPos)) continue;
-            remove(&constructor, queued);
+            Remove(&constructor, queued);
             break;
         }
-        if (order) remove(&constructor, order);
+        if (order) Remove(&constructor, order);
         IDDrawSurface::OutptTxt("[MexUpgrade] rejected incomplete order pair");
         return true;
     }
@@ -317,7 +396,7 @@ bool MexUpgrade::Enabled()
     if (!MyConfig) return false;
     static const bool enabled = [] {
         const bool active = MyConfig->GetIniBool("MexUpgrade", TRUE) != FALSE;
-        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] upgrade cursor and Shift queue enabled");
+        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] animated footprint and Shift cancel enabled");
         return active;
     }();
     return enabled;
@@ -343,9 +422,65 @@ void MexUpgrade::UpdateCursor(TAdynmemStruct* ta)
     if (!stock || (displayed != stock && displayed != &icon.sequence)) return;
     Upgrade upgrade = {};
     const bool ready = !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000)
-        && FindUpgrade(ta, upgrade, false);
+        && FindUpgradeTarget(ta, upgrade) && PrepareUpgrade(*ta, upgrade, false);
     auto* desired = ready ? &icon.sequence : stock;
     if (displayed != desired) SetUICursor(&ta->desktopGUI, desired);
+}
+
+void MexUpgrade::DrawFeedback(TAdynmemStruct* ta, _OFFSCREEN* surface)
+{
+    if (!feedback.world) return;
+    if (!ta || ta != feedback.world || !DataShare || DataShare->TAProgress != TAInGame
+        || DataShare->PlayingDemo || static_cast<unsigned>(ta->GameTime) - feedback.start >= kFeedbackTicks
+        || !ta->BeginUnitsArray_p || !ta->EndOfUnitsArray_p || !ta->UnitDef)
+    {
+        feedback = {};
+        return;
+    }
+    // Native DrawGameScreen already draws the queue while this key is held.
+    const auto keyDown = reinterpret_cast<int (__stdcall*)(int)>(0x004C1B80u);
+    if (!surface || !surface->lpSurface || keyDown(0xF9)) return;
+
+    const int player = ta->LocalHumanPlayer_PlayerID;
+    if (player < 0 || player >= 10 || !feedback.constructorSlot
+        || feedback.constructorSlot >= static_cast<size_t>(ta->EndOfUnitsArray_p - ta->BeginUnitsArray_p)
+        || static_cast<unsigned>(feedback.type) >= ta->UNITINFOCount) return;
+    auto& constructor = ta->BeginUnitsArray_p[feedback.constructorSlot];
+    if (!LiveOwned(constructor, ta->Players[player]) || constructor.UnitID != feedback.constructorType
+        || !(constructor.UnitSelected & UnitSelected_State)) return;
+
+    // Five stack arguments. The native renderer computes the 10-tick expansion
+    // from StartTime and uses the selected builder's own palette colors.
+    using DrawBuildSpotQueue = void (__stdcall*)(_OFFSCREEN*, const void*, UnitOrdersStruct*, Position_Dword*, int);
+    const auto draw = reinterpret_cast<DrawBuildSpotQueue>(0x00438C00u);
+    unsigned scanned = 0;
+    for (auto* order = constructor.UnitOrders; order && scanned++ < kMaxOrders; order = order->NextOrder)
+    {
+        if (order->Unit_ptr != &constructor || order->StartTime != feedback.start
+            || !IsBuildAt(order, feedback.action, feedback.type, feedback.position)) continue;
+        Position_Dword out = {};
+        draw(surface, &ta->CameraToUnit, order, &out, 0);
+        return;
+    }
+    feedback = {};
+}
+
+bool MexUpgrade::IsQueuedBuild(const TAdynmemStruct* ta, const UnitStruct* constructor,
+    const UnitOrdersStruct* preceding)
+{
+    if (!preceding || !preceding->AttackTargat || !preceding->NextOrder
+        || !preceding->NextOrder->BuildUnitID || !ta || !ta->BeginUnitsArray_p || !ta->EndOfUnitsArray_p
+        || !constructor || preceding->Unit_ptr != constructor || preceding->NextOrder->Unit_ptr != constructor
+        || !constructor->UnitType || !constructor->Owner_PlayerPtr0 || !Enabled()) return false;
+    const auto* target = preceding->AttackTargat;
+    if (target < ta->BeginUnitsArray_p || target >= ta->EndOfUnitsArray_p
+        || !LiveOwned(*target, *constructor->Owner_PlayerPtr0)) return false;
+    const auto* replacement = ReplacementName(*target->UnitType);
+    if (!replacement) return false;
+    const auto actions = UpgradeActions(*constructor);
+    return actions.reclaim && actions.build && preceding->COBHandler_index == actions.reclaim
+        && preceding->NextOrder->COBHandler_index == actions.build
+        && IsReplacementBuild(*ta, *preceding->NextOrder, *target, replacement);
 }
 
 bool MexUpgrade::TryCommand(TAdynmemStruct* ta, const _MOUSEEVENT* mouse)
@@ -361,6 +496,10 @@ bool MexUpgrade::TryCommand(TAdynmemStruct* ta, const _MOUSEEVENT* mouse)
     if (!leftCommand && !rightCommand) return false;
 
     Upgrade upgrade = {};
-    return FindUpgrade(ta, upgrade, true)
-        && QueueUpgrade(*upgrade.constructor, *upgrade.target, upgrade.type, upgrade.buildPos, shift);
+    if (!FindUpgradeTarget(ta, upgrade)) return false;
+    const auto actions = UpgradeActions(*upgrade.constructor);
+    if (!actions.reclaim || !actions.build) return false;
+    // Existing orders can still be cancelled if the site is now blocked.
+    if (shift && CancelUpgrade(*ta, upgrade, actions)) return true;
+    return PrepareUpgrade(*ta, upgrade, true) && QueueUpgrade(*ta, upgrade, actions, shift);
 }
