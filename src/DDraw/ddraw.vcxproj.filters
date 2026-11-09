@@ -140,6 +140,7 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="DrawnMove.cpp" />
+    <ClCompile Include="MexUpgrade.cpp" />
     <ClCompile Include="tahook.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -527,6 +528,7 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="DrawnMove.h" />
+    <ClInclude Include="MexUpgrade.h" />
     <ClInclude Include="DrawnMoveGeometry.h" />
     <ClInclude Include="tahook.h">
       <Filter>Header Files</Filter>

@@ -1,7 +1,7 @@
 name: Validate drawn move formations
 on:
   push:
-    branches: ['feature/drawn-move-formations']
+    branches: ['feature/drawn-move-formations', 'feature/mex-upgrade']
   pull_request:
     paths:
       - 'src/DDraw/**'
@@ -36,6 +36,9 @@ jobs:
         run: msbuild src/DDraw/ddraw.vcxproj /p:Configuration=ReleasePublic /p:Platform=Win32 /p:TDRAW_CONFIG=TDRAW_CONFIG_${{ matrix.mod }}
       - name: Verify megamap support is compiled into the actual DLL
         run: python src/DDraw/test/verify_drawn_move_build.py src/DDraw/Public/tdraw.dll
+      - name: Verify the extractor upgrade is included in the test build
+        if: github.ref == 'refs/heads/feature/mex-upgrade'
+        run: python -c "from pathlib import Path; assert b'[MexUpgrade] queued' in Path('src/DDraw/Public/tdraw.dll').read_bytes()"
       - name: Verify Windows 7 imports
         run: python src/DDraw/tools/check_win7_imports.py src/DDraw/Public/tdraw.dll
       - uses: actions/upload-artifact@v4

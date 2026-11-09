@@ -19,6 +19,7 @@
 #include "IncreaseCompositeSize.h"
 #include "CameraBounds.h"
 #include "SmallMapViewport.h"
+#include "MexUpgrade.h"
 
 #include "ddraw.h"
 #include "Profiler.h"
@@ -173,10 +174,21 @@ namespace
     // Margin clicks must not turn the clamped height-resolver point into orders.
     void __fastcall DispatchSmallMapCommand(void* context, void*, int* message)
     {
-        const TAdynmemStruct* ta = *TAmainStruct_PtrPtr;
+        TAdynmemStruct* ta = *TAmainStruct_PtrPtr;
         if (HasSmallMap(ta) && (ta->BuildSpotState & 3) == 0) return;
+        if (MexUpgrade::TryCommand(ta, reinterpret_cast<const MOUSEEVENT*>(message))) return;
         reinterpret_cast<void (__thiscall*)(void*, int*)>(0x00498F70u)(context, message);
     }
+
+    void __fastcall DispatchRightCommand(void* context, void*, MOUSEEVENT* message)
+    {
+        if (MexUpgrade::TryCommand(*TAmainStruct_PtrPtr, message)) return;
+        reinterpret_cast<void (__thiscall*)(void*, MOUSEEVENT*)>(0x00499100u)(context, message);
+    }
+
+    constexpr DWORD MexUpgradeRightCallAddr = 0x004993ACu;
+    constexpr BYTE MexUpgradeRightCallExpected[] = {0xE8,0x4F,0xFD,0xFF,0xFF};
+    BYTE MexUpgradeRightCallPatch[sizeof(MexUpgradeRightCallExpected)];
 
     struct SmallMapCall
     {
@@ -2671,6 +2683,18 @@ TABugFixing::TABugFixing ()
                 FlushInstructionCache(GetCurrentProcess(),NULL,0);
             }
         }
+    }
+
+    if (MexUpgrade::Enabled() && memcmp(reinterpret_cast<const void*>(MexUpgradeRightCallAddr),
+        MexUpgradeRightCallExpected, sizeof(MexUpgradeRightCallExpected)) == 0)
+    {
+        MexUpgradeRightCallPatch[0] = 0xE8;
+        const DWORD displacement = reinterpret_cast<DWORD>(&DispatchRightCommand) - (MexUpgradeRightCallAddr + 5);
+        memcpy(MexUpgradeRightCallPatch + 1, &displacement, sizeof(displacement));
+        m_hooks.push_back(std::make_unique<SingleHook>(MexUpgradeRightCallAddr,
+            sizeof(MexUpgradeRightCallPatch), INLINE_UNPROTECTEVINMENT, MexUpgradeRightCallPatch));
+        FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(MexUpgradeRightCallAddr),
+            sizeof(MexUpgradeRightCallPatch));
     }
 
     if (memcmp(reinterpret_cast<const void*>(MapPreviewCopyCallAddr - 10u),
