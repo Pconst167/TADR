@@ -186,9 +186,13 @@ namespace
         reinterpret_cast<void (__thiscall*)(void*, MOUSEEVENT*)>(0x00499100u)(context, message);
     }
 
-    constexpr DWORD MexUpgradeRightCallAddr = 0x004993ACu;
-    constexpr BYTE MexUpgradeRightCallExpected[] = {0xE8,0x4F,0xFD,0xFF,0xFF};
-    BYTE MexUpgradeRightCallPatch[sizeof(MexUpgradeRightCallExpected)];
+    void __cdecl DispatchUpgradeCursor()
+    {
+        // Run the native input update first. Its cursor index still controls
+        // stock selection and commands. Only the displayed sprite is replaced.
+        reinterpret_cast<void (__cdecl*)()>(0x0041C180u)();
+        MexUpgrade::UpdateCursor(*TAmainStruct_PtrPtr);
+    }
 
     struct SmallMapCall
     {
@@ -208,6 +212,13 @@ namespace
         {0x00498EF9u, {0xE8,0x52,0xBC,0xFE,0xFF}, reinterpret_cast<void*>(&ProjectSmallMapPointer)},
         {0x004995B3u, {0xE8,0xB8,0xF9,0xFF,0xFF}, reinterpret_cast<void*>(&DispatchSmallMapCommand)}
     };
+    SmallMapCall MexUpgradeRightClick = {
+        0x004993ACu, {0xE8,0x4F,0xFD,0xFF,0xFF}, reinterpret_cast<void*>(&DispatchRightCommand)
+    };
+    SmallMapCall MexUpgradeCursor = {
+        0x004992CDu, {0xE8,0xAE,0x2E,0xF8,0xFF}, reinterpret_cast<void*>(&DispatchUpgradeCursor)
+    };
+
     // Map-selection preview fix by TAG_Venom.
     const DWORD MapPreviewCopyCallAddr = 0x004666C0u;
     // PUSH 0, PUSH 0, LEA EDX,[ESP+68], PUSH EDI, PUSH EDX, CALL DrawFrame.
@@ -2685,16 +2696,26 @@ TABugFixing::TABugFixing ()
         }
     }
 
-    if (MexUpgrade::Enabled() && memcmp(reinterpret_cast<const void*>(MexUpgradeRightCallAddr),
-        MexUpgradeRightCallExpected, sizeof(MexUpgradeRightCallExpected)) == 0)
+    if (MexUpgrade::Enabled())
     {
-        MexUpgradeRightCallPatch[0] = 0xE8;
-        const DWORD displacement = reinterpret_cast<DWORD>(&DispatchRightCommand) - (MexUpgradeRightCallAddr + 5);
-        memcpy(MexUpgradeRightCallPatch + 1, &displacement, sizeof(displacement));
-        m_hooks.push_back(std::make_unique<SingleHook>(MexUpgradeRightCallAddr,
-            sizeof(MexUpgradeRightCallPatch), INLINE_UNPROTECTEVINMENT, MexUpgradeRightCallPatch));
-        FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(MexUpgradeRightCallAddr),
-            sizeof(MexUpgradeRightCallPatch));
+        const auto installCall = [this](SmallMapCall& site) {
+            const auto* address = reinterpret_cast<const void*>(site.address);
+            if (memcmp(address, site.expected, sizeof(site.expected)) != 0) return false;
+            site.patch[0] = 0xE8;
+            const DWORD displacement = reinterpret_cast<DWORD>(site.replacement) - (site.address + 5);
+            memcpy(site.patch + 1, &displacement, sizeof(displacement));
+            m_hooks.push_back(std::make_unique<SingleHook>(site.address, sizeof(site.patch),
+                INLINE_UNPROTECTEVINMENT, site.patch));
+            FlushInstructionCache(GetCurrentProcess(), address, sizeof(site.patch));
+            if (memcmp(address, site.patch, sizeof(site.patch)) == 0) return true;
+            m_hooks.pop_back();
+            FlushInstructionCache(GetCurrentProcess(), address, sizeof(site.patch));
+            return false;
+        };
+        const bool right = installCall(MexUpgradeRightClick);
+        const bool cursor = right && SmallMapHooksInstalled && installCall(MexUpgradeCursor);
+        IDDrawSurface::OutptFmtTxt("[MexUpgrade] hooks left=%d right=%d cursor=%d",
+            SmallMapHooksInstalled, right, cursor);
     }
 
     if (memcmp(reinterpret_cast<const void*>(MapPreviewCopyCallAddr - 10u),

@@ -4,6 +4,7 @@
 #include "tamem.h"
 #include "tafunctions.h"
 #include "TAConfig.h"
+#include "Gaf.h"
 #include "MexUpgrade.h"
 
 #include <cstdlib>
@@ -14,6 +15,67 @@ namespace
     constexpr unsigned kDefinitionEnabled = 0x00800000;
     constexpr unsigned kMaxOrders = 8192;
     constexpr int kMohoFootprint = 5;
+    thread_local bool checkingSite = false;
+
+    struct SiteProbe
+    {
+        // TestGridSpot uses two shared scratch values. An upgrade probe runs
+        // in the input handler and should leave the native build preview alone.
+        DWORD* const scratch = reinterpret_cast<DWORD*>(0x0051E684u);
+        const DWORD height = scratch[0];
+        const DWORD flags = scratch[1];
+        const bool previous = checkingSite;
+
+        SiteProbe() { checkingSite = true; }
+        ~SiteProbe()
+        {
+            scratch[0] = height;
+            scratch[1] = flags;
+            checkingSite = previous;
+        }
+    };
+
+    struct UpgradeCursor
+    {
+        unsigned char pixels[13 * 14];
+        GAFFrame frame = {};
+        GAFSequence sequence = {};
+
+        UpgradeCursor()
+        {
+            static constexpr char art[] =
+                "......#......"
+                ".....#+#....."
+                "....#+++#...."
+                "...#+++++#..."
+                "..#+++++++#.."
+                ".#+++++++++#."
+                "##+++++++++##"
+                "..###+++###.."
+                "....#+++#...."
+                "....#+++#...."
+                "....#+++#...."
+                "....#+++#...."
+                "....#+++#...."
+                "....#####....";
+            static_assert(sizeof(art) == sizeof(pixels) + 1, "Upgrade cursor dimensions");
+            for (size_t i = 0; i < sizeof(pixels); ++i)
+                pixels[i] = art[i] == '+' ? 232 : art[i] == '#' ? 142 : 9;
+            // The tip is the click hotspot. Index 9 is TA cursor transparency.
+            frame = {13, 14, 6, 0, 9, 0, 0, 0, pixels, 0};
+            sequence.Frames = 1;
+            sequence.Signature = 1;
+            sequence.PtrFrameAry[0] = {&frame, 10};
+        }
+    };
+
+    struct Upgrade
+    {
+        UnitStruct* constructor;
+        UnitStruct* target;
+        int type;
+        Position_Dword buildPos;
+    };
 
     struct UpgradePair
     {
@@ -112,6 +174,7 @@ namespace
         UnitDefStruct preview = def;
         preview.YardMap = yard;
         const unsigned packed = (static_cast<unsigned>(top) << 16) | static_cast<unsigned>(left);
+        const SiteProbe probe;
         if (!TestGridSpot(&preview, packed, slot, &owner)) return false;
 
         // TestGridSpot publishes the validated terrain height used by native build orders.
@@ -119,6 +182,52 @@ namespace
         position.X = static_cast<unsigned short>(left * 16 + def.FootX * 8);
         position.Y = static_cast<unsigned short>(top * 16 + def.FootY * 8);
         position.Z = static_cast<unsigned short>(gridHeight());
+        return true;
+    }
+
+    bool CanReclaim(UnitStruct* constructor, UnitStruct* target)
+    {
+        const auto canReclaim = reinterpret_cast<int (__thiscall*)(UnitStruct*, UnitStruct*)>(0x00489960u);
+        return canReclaim(constructor, target) != 0;
+    }
+
+    bool FindUpgrade(TAdynmemStruct* ta, Upgrade& upgrade, bool reportBlocked)
+    {
+        if (!ta || !DataShare || DataShare->TAProgress != TAInGame || DataShare->PlayingDemo
+            || ta->PrepareOrder_Type != ordertype::STOP || (ta->BuildSpotState & 10) != 2) return false;
+        if (ta->InterfaceType != 0 && (ta->InterfaceType != 1 || !(ta->BuildSpotState & 4))) return false;
+
+        const int player = ta->LocalHumanPlayer_PlayerID;
+        if (player < 0 || player >= 10 || !ta->UnitDef || !ta->FeatureMap
+            || !ta->BeginUnitsArray_p || !ta->EndOfUnitsArray_p) return false;
+        auto& owner = ta->Players[player];
+        if (!owner.PlayerInfo || (owner.PlayerInfo->PropertyMask & WATCH) || owner.My_PlayerType != Player_LocalHuman
+            || !owner.Units || !owner.UnitsAry_End || owner.Units < ta->BeginUnitsArray_p
+            || owner.UnitsAry_End >= ta->EndOfUnitsArray_p || owner.UnitsAry_End < owner.Units) return false;
+
+        const unsigned slot = ta->MouseOverUnit;
+        if (!slot || slot >= static_cast<size_t>(ta->EndOfUnitsArray_p - ta->BeginUnitsArray_p)) return false;
+        auto& target = ta->BeginUnitsArray_p[slot];
+        if (!LiveOwned(target, owner) || static_cast<unsigned short>(target.UnitInGameIndex) != slot
+            || target.Nanoframe != 0.0f || target.UnitType->bmcode != 0 || target.UnitType->extractsmetal <= 0)
+            return false;
+        auto* constructor = SingleSelectedUnit(owner);
+        if (!constructor || constructor == &target || !constructor->IsUnit || constructor->Nanoframe != 0.0f
+            || !(constructor->UnitType->UnitTypeMask_0 & builder) || constructor->UnitType->bmcode == 0)
+            return false;
+
+        const int type = FindReplacement(*ta, *target.UnitType, *constructor->UnitType);
+        if (!type || !CanReclaim(constructor, &target)) return false;
+        const auto& def = ta->UnitDef[type];
+        if (!UnderBuildLimit(owner, type, def.buildLimit)) return false;
+        Position_Dword buildPos = {};
+        if (!CheckReplacementSite(*ta, owner, target, slot, def, buildPos))
+        {
+            if (reportBlocked)
+                IDDrawSurface::OutptFmtTxt("[MexUpgrade] replacement site blocked: extractor=%u build=%d", slot, type);
+            return false;
+        }
+        upgrade = {constructor, &target, type, buildPos};
         return true;
     }
 
@@ -151,8 +260,6 @@ namespace
     bool QueueUpgrade(UnitStruct& constructor, UnitStruct& target, int type,
         const Position_Dword& buildPos, bool shift)
     {
-        const auto canReclaim = reinterpret_cast<int (__thiscall*)(UnitStruct*, UnitStruct*)>(0x00489960u);
-        if (!canReclaim(&constructor, &target)) return false;
         const bool air = (constructor.UnitType->UnitTypeMask_0 & canfly) != 0;
         const unsigned reclaim = ActionIndex(air ? "VTOL_RECLAIMUNIT" : "RECLAIMUNIT");
         const unsigned build = ActionIndex(air ? "VTOL_MOBILEBUILD" : "MOBILEBUILD");
@@ -210,7 +317,7 @@ bool MexUpgrade::Enabled()
     if (!MyConfig) return false;
     static const bool enabled = [] {
         const bool active = MyConfig->GetIniBool("MexUpgrade", TRUE) != FALSE;
-        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] stationary extractor fix enabled");
+        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] upgrade cursor and Shift queue enabled");
         return active;
     }();
     return enabled;
@@ -219,48 +326,41 @@ bool MexUpgrade::Enabled()
 #endif
 }
 
+bool MexUpgrade::CheckingSite()
+{
+    return checkingSite;
+}
+
+void MexUpgrade::UpdateCursor(TAdynmemStruct* ta)
+{
+    if (!ta) return;
+    const unsigned index = ta->CurrentCursora_Index;
+    if (index >= sizeof(ta->cursor_ary) / sizeof(ta->cursor_ary[0])) return;
+    auto* stock = ta->cursor_ary[index];
+    auto* displayed = reinterpret_cast<GAFSequence*>(ta->desktopGUI.Cursor_3);
+    static UpgradeCursor icon;
+    // Respect custom cursors owned by other patches, such as wreck snapping.
+    if (!stock || (displayed != stock && displayed != &icon.sequence)) return;
+    Upgrade upgrade = {};
+    const bool ready = !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000)
+        && FindUpgrade(ta, upgrade, false);
+    auto* desired = ready ? &icon.sequence : stock;
+    if (displayed != desired) SetUICursor(&ta->desktopGUI, desired);
+}
+
 bool MexUpgrade::TryCommand(TAdynmemStruct* ta, const _MOUSEEVENT* mouse)
 {
-    if (!Enabled() || !ta || !mouse || !DataShare || DataShare->TAProgress != TAInGame
-        || DataShare->PlayingDemo || ta->PrepareOrder_Type != ordertype::STOP || (ta->BuildSpotState & 10) != 2
-        || (mouse->fwKeys & MK_CONTROL) || (GetAsyncKeyState(VK_MENU) & 0x8000)) return false;
+    if (!Enabled() || !ta || !mouse || (mouse->fwKeys & MK_CONTROL)
+        || (GetAsyncKeyState(VK_MENU) & 0x8000)) return false;
     const bool shift = (mouse->fwKeys & MK_SHIFT) != 0;
-    // Left-click mode uses Shift-click for additive selection. Right-click mode
-    // has a separate order button and can queue upgrades with Shift held.
-    const bool leftCommand = ta->InterfaceType == 0 && mouse->Msg == WM_LBUTTONUP
-        && !shift && !(mouse->fwKeys & MK_RBUTTON);
+    // An eligible extractor takes precedence over additive selection. All
+    // other clicks fall through to the stock selection or order handler.
+    const bool leftCommand = ta->InterfaceType == 0 && mouse->Msg == WM_LBUTTONUP && !(mouse->fwKeys & MK_RBUTTON);
     const bool rightCommand = ta->InterfaceType == 1 && mouse->Msg == WM_RBUTTONDOWN
-        && !(mouse->fwKeys & MK_LBUTTON) && (ta->BuildSpotState & 4) != 0;
+        && !(mouse->fwKeys & MK_LBUTTON);
     if (!leftCommand && !rightCommand) return false;
 
-    const int player = ta->LocalHumanPlayer_PlayerID;
-    if (player < 0 || player >= 10 || !ta->UnitDef || !ta->FeatureMap
-        || !ta->BeginUnitsArray_p || !ta->EndOfUnitsArray_p) return false;
-    auto& owner = ta->Players[player];
-    if (!owner.PlayerInfo || (owner.PlayerInfo->PropertyMask & WATCH) || owner.My_PlayerType != Player_LocalHuman
-        || !owner.Units || !owner.UnitsAry_End || owner.Units < ta->BeginUnitsArray_p
-        || owner.UnitsAry_End >= ta->EndOfUnitsArray_p || owner.UnitsAry_End < owner.Units) return false;
-
-    const unsigned slot = ta->MouseOverUnit;
-    if (!slot || slot >= static_cast<size_t>(ta->EndOfUnitsArray_p - ta->BeginUnitsArray_p)) return false;
-    auto& target = ta->BeginUnitsArray_p[slot];
-    if (!LiveOwned(target, owner) || static_cast<unsigned short>(target.UnitInGameIndex) != slot
-        || target.Nanoframe != 0.0f || target.UnitType->bmcode != 0 || target.UnitType->extractsmetal <= 0)
-        return false;
-    auto* constructor = SingleSelectedUnit(owner);
-    if (!constructor || constructor == &target || !constructor->IsUnit || constructor->Nanoframe != 0.0f
-        || !(constructor->UnitType->UnitTypeMask_0 & builder) || constructor->UnitType->bmcode == 0)
-        return false;
-
-    const int type = FindReplacement(*ta, *target.UnitType, *constructor->UnitType);
-    if (!type) return false;
-    const auto& def = ta->UnitDef[type];
-    Position_Dword buildPos = {};
-    if (!UnderBuildLimit(owner, type, def.buildLimit)) return false;
-    if (!CheckReplacementSite(*ta, owner, target, slot, def, buildPos))
-    {
-        IDDrawSurface::OutptFmtTxt("[MexUpgrade] replacement site blocked: extractor=%u build=%d", slot, type);
-        return false;
-    }
-    return QueueUpgrade(*constructor, target, type, buildPos, shift);
+    Upgrade upgrade = {};
+    return FindUpgrade(ta, upgrade, true)
+        && QueueUpgrade(*upgrade.constructor, *upgrade.target, upgrade.type, upgrade.buildPos, shift);
 }
