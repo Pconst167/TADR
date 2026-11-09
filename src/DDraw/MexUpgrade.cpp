@@ -169,7 +169,7 @@ namespace
     }
 
     bool CheckReplacementSite(const TAdynmemStruct& ta, PlayerStruct& owner,
-        const UnitStruct& old, unsigned slot, const UnitDefStruct& def, Position_Dword& position)
+        const UnitStruct& old, unsigned slot, const UnitDefStruct& def, Position_Dword& position, unsigned& blocker)
     {
         int left, top;
         if (!def.YardMap || !ReplacementTile(old, def, left, top)) return false;
@@ -189,7 +189,11 @@ namespace
                 const auto occupant = ta.FeatureMap[tileY * ta.FeatureMapSizeX + tileX].occupyingUnitNumber;
                 // The native preview can omit occupancies in fog. Never reclaim
                 // the extractor if a different ground occupant already blocks it.
-                if (occupant && occupant != slot) return false;
+                if (occupant && occupant != slot)
+                {
+                    blocker = occupant;
+                    return false;
+                }
                 if (occupant == slot && tileX >= old.XGridPos && tileX < old.XGridPos + old.SizeFootX
                     && tileY >= old.YGridPos && tileY < old.YGridPos + old.SizeFootZ
                     && (yard[row * def.FootX + column] & 0x01))
@@ -257,10 +261,12 @@ namespace
         const auto& def = ta.UnitDef[type];
         if (!UnderBuildLimit(owner, type, def.buildLimit)) return false;
         const unsigned slot = static_cast<unsigned short>(target.UnitInGameIndex);
-        if (!CheckReplacementSite(ta, owner, target, slot, def, upgrade.buildPos))
+        unsigned blocker = 0;
+        if (!CheckReplacementSite(ta, owner, target, slot, def, upgrade.buildPos, blocker))
         {
             if (reportBlocked)
-                IDDrawSurface::OutptFmtTxt("[MexUpgrade] replacement site blocked: extractor=%u build=%d", slot, type);
+                IDDrawSurface::OutptFmtTxt("[MexUpgrade] replacement site blocked: builder=%u extractor=%u build=%d occupant=%u",
+                    static_cast<unsigned short>(constructor.UnitInGameIndex), slot, type, blocker);
             return false;
         }
         upgrade.type = type;
@@ -343,12 +349,13 @@ namespace
         const auto& buildPos = upgrade.buildPos;
         const unsigned reclaim = actions.reclaim, build = actions.build;
 
-        // Exact upgrade pairs are cancelled before we get here. A nearby
-        // independent build can still toggle off in the native dispatcher.
+        // Shift may toggle an existing or nearby order. A plain click replaces
+        // the queue, including when the clicked extractor was already queued.
         unsigned scanned = 0;
         for (auto* order = constructor.UnitOrders; order; order = order->NextOrder)
         {
             if (++scanned >= kMaxOrders) return false;
+            if (!shift) continue;
             if ((order->COBHandler_index == reclaim && order->AttackTargat == &target)
                 || (order->COBHandler_index == build
                     && std::abs(static_cast<int>(order->Pos.X) - buildPos.X) <= 16
@@ -369,9 +376,15 @@ namespace
         {
             feedback = {&ta, static_cast<unsigned short>(constructor.UnitInGameIndex),
                 constructor.UnitID, build, order->NextOrder->StartTime, type, buildPos};
-            IDDrawSurface::OutptFmtTxt("[MexUpgrade] queued builder=%u extractor=%u build=%d shift=%d",
+            IDDrawSurface::OutptFmtTxt("[MexUpgrade] queued builder=%u extractor=%u build=%d shift=%d first=%d",
                 static_cast<unsigned short>(constructor.UnitInGameIndex),
-                static_cast<unsigned short>(target.UnitInGameIndex), type, shift);
+                static_cast<unsigned short>(target.UnitInGameIndex), type, shift, constructor.UnitOrders == order);
+            if (!shift && constructor.UnitOrders && constructor.UnitOrders != order)
+            {
+                const auto& head = *constructor.UnitOrders;
+                IDDrawSurface::OutptFmtTxt("[MexUpgrade] native order still ahead of replacement: action=%u state=%u flags=%08X",
+                    static_cast<unsigned>(head.COBHandler_index), static_cast<unsigned>(head.State), head.Order_State);
+            }
             return true;
         }
 
@@ -396,7 +409,7 @@ bool MexUpgrade::Enabled()
     if (!MyConfig) return false;
     static const bool enabled = [] {
         const bool active = MyConfig->GetIniBool("MexUpgrade", TRUE) != FALSE;
-        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] animated footprint and Shift cancel enabled");
+        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] plain-click queue replacement enabled");
         return active;
     }();
     return enabled;
