@@ -1,0 +1,24 @@
+name: Validate standalone extractor upgrades
+on:
+  push:
+    branches: ['ci/one-click-extractor-upgrades']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mod: [ESCALATION, PROTA, OTA]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_x86
+      - name: Build standalone DLL
+        run: msbuild src/DDraw/ddraw.vcxproj /p:Configuration=ReleasePublic /p:Platform=Win32 /p:TDRAW_CONFIG=TDRAW_CONFIG_${{ matrix.mod }}
+      - name: Verify mod defaults and absence of the formations patch
+        run: python -c "from pathlib import Path; data=Path('src/DDraw/Public/tdraw.dll').read_bytes(); assert (b'[MexUpgrade] plain-click queue replacement enabled' in data) == ('${{ matrix.mod }}' != 'OTA'); assert b'[DrawnMove] build=' not in data"
+      - name: Verify Windows 7 imports
+        run: python src/DDraw/tools/check_win7_imports.py src/DDraw/Public/tdraw.dll
