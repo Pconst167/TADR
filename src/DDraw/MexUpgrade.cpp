@@ -27,7 +27,8 @@ namespace
 
     bool LiveOwned(const UnitStruct& unit, const PlayerStruct& owner)
     {
-        return unit.IsUnit && unit.UnitID && unit.UnitType && unit.Owner_PlayerPtr0 == &owner
+        // IsUnit is the movement object pointer. Buildings can be live without it.
+        return unit.UnitID && unit.UnitType && unit.Owner_PlayerPtr0 == &owner
             && (unit.UnitSelected & 0x10000000) && !(unit.UnitSelected & 0x4000);
     }
 
@@ -207,7 +208,11 @@ bool MexUpgrade::Enabled()
 {
 #if defined(TDRAW_CONFIG_ESCALATION) || defined(TDRAW_CONFIG_PROTA)
     if (!MyConfig) return false;
-    static const bool enabled = MyConfig->GetIniBool("MexUpgrade", TRUE) != FALSE;
+    static const bool enabled = [] {
+        const bool active = MyConfig->GetIniBool("MexUpgrade", TRUE) != FALSE;
+        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] stationary extractor fix enabled");
+        return active;
+    }();
     return enabled;
 #else
     return false;
@@ -243,7 +248,7 @@ bool MexUpgrade::TryCommand(TAdynmemStruct* ta, const _MOUSEEVENT* mouse)
         || target.Nanoframe != 0.0f || target.UnitType->bmcode != 0 || target.UnitType->extractsmetal <= 0)
         return false;
     auto* constructor = SingleSelectedUnit(owner);
-    if (!constructor || constructor == &target || constructor->Nanoframe != 0.0f
+    if (!constructor || constructor == &target || !constructor->IsUnit || constructor->Nanoframe != 0.0f
         || !(constructor->UnitType->UnitTypeMask_0 & builder) || constructor->UnitType->bmcode == 0)
         return false;
 
@@ -251,7 +256,11 @@ bool MexUpgrade::TryCommand(TAdynmemStruct* ta, const _MOUSEEVENT* mouse)
     if (!type) return false;
     const auto& def = ta->UnitDef[type];
     Position_Dword buildPos = {};
-    if (!UnderBuildLimit(owner, type, def.buildLimit) || !CheckReplacementSite(*ta, owner, target, slot, def, buildPos))
+    if (!UnderBuildLimit(owner, type, def.buildLimit)) return false;
+    if (!CheckReplacementSite(*ta, owner, target, slot, def, buildPos))
+    {
+        IDDrawSurface::OutptFmtTxt("[MexUpgrade] replacement site blocked: extractor=%u build=%d", slot, type);
         return false;
+    }
     return QueueUpgrade(*constructor, target, type, buildPos, shift);
 }
