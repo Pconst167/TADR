@@ -1272,6 +1272,14 @@ LRESULT CALLBACK _WinProc(HWND WinProcWnd, UINT Msg, WPARAM wParam, LPARAM lPara
     __try
 	{
 		UpdateTAProcess ( );
+#if TA_HOOK_ENABLE
+		// The owner of a build press must see release/cancellation before
+		// dialogs or the whiteboard can consume the matching input.
+		if (LocalShare->TAHook
+			&& static_cast<CTAHook*>(LocalShare->TAHook)->OwnsRectangleInput()
+			&& static_cast<CTAHook*>(LocalShare->TAHook)->RectangleGestureMessage(WinProcWnd, Msg, wParam, lParam))
+			return 0;
+#endif
         // A pending gesture must see release/cancellation even over a dialog,
         // whiteboard or other overlay that consumes ordinary input.
         if (DrawnMove::OwnsInput() && DrawnMove::Message(WinProcWnd, Msg, wParam, lParam, false))
