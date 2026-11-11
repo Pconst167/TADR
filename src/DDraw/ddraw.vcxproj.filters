@@ -144,6 +144,9 @@
     <ClCompile Include="tahook.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="BuildRectangleOrders.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UnicodeSupport.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -534,6 +537,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="BuildRectangleGeometry.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="BuildRectangleOrders.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="taHPI.h">
