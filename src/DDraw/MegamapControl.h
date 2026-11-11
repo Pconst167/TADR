@@ -37,6 +37,9 @@ public:
     bool FormationGroundPoint(Position_Dword* point, int screenX, int screenY);
     bool FormationScreenPoint(POINT* screen, RECT* clip, const Position_Dword& point);
 
+	// Update terrain coordinates and the visible pointer before a build gesture consumes input.
+	bool UpdateBuildMouse(int screenX, int screenY);
+
 
 	BOOL IsBliting(void);
 	BOOL IsDrawRect (BOOL Build_b=FALSE);

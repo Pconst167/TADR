@@ -620,6 +620,7 @@ if NOT "$(LocalDebuggerWorkingDirectory)" == "$(ProjectDir)" if exist "$(LocalDe
     <ClInclude Include="MexUpgrade.h" />
     <ClInclude Include="DrawnMoveGeometry.h" />
     <ClInclude Include="tahook.h" />
+    <ClInclude Include="BuildRectangleGeometry.h" />
     <ClInclude Include="taHPI.h" />
     <ClInclude Include="tamem.h" />
     <ClInclude Include="AiSeardchMapEntriesLimit.h" />
