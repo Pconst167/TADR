@@ -621,6 +621,27 @@ bool MegaMapControl::Message(HWND WinProcWnd, UINT Msg, WPARAM wParam, LPARAM lP
 	return FALSE;
 }
 
+#if ALLIED_CURSORS_ENABLE
+bool MegaMapControl::CursorGroundPoint(Position_Dword* point, int x, int y)
+{
+    if (!point || !TAmainStruct_Ptr || !IsBliting() || !CheckInControl(x,y) || !CheckInMap(x,y)) return false;
+    ScreenPos2TAPos(point,x-MegaMapScreen.left,y-MegaMapScreen.top,TRUE);
+    return point->X < (TAmainStruct_Ptr->FeatureMapSizeX-2)*16
+        && point->Y < (TAmainStruct_Ptr->FeatureMapSizeY-8)*16;
+}
+
+bool MegaMapControl::CursorScreenPoint(POINT* screen, RECT* clip, const Position_Dword& point)
+{
+    if (!screen || !clip || !TAmainStruct_Ptr || !IsBliting()) return false;
+    TAPos2ScreenPos(screen,point.X,point.Y,point.Z);
+    screen->x+=MegaMapScreen.left;
+    screen->y+=MegaMapScreen.top;
+    *clip=MegaMapScreen;
+    --clip->right; --clip->bottom;
+    return CheckInControl(screen->x,screen->y) && CheckInMap(screen->x,screen->y);
+}
+#endif
+
 #if DRAWN_MOVE_FORMATIONS_ENABLE
 bool MegaMapControl::FormationGroundPoint(Position_Dword* point, int x, int y)
 {

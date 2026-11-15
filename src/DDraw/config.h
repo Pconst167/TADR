@@ -41,6 +41,18 @@
 
 #include "OptionalUnitControls.h"
 
+// Teammate cursors are always shown in builds that include this HUD feature.
+#ifndef ALLIED_CURSORS_ENABLE
+#if defined(TDRAW_CONFIG_ESCALATION)
+#define ALLIED_CURSORS_ENABLE 1
+#else
+#define ALLIED_CURSORS_ENABLE 0
+#endif
+#endif
+#if ALLIED_CURSORS_ENABLE != 0 && ALLIED_CURSORS_ENABLE != 1
+#error "ALLIED_CURSORS_ENABLE must be 0 or 1"
+#endif
+
 // Keep looping menu audio in TA's tracked sound slots. Override per config if needed.
 #ifndef MENU_HUM_TRACKED_LOOPING
 #define MENU_HUM_TRACKED_LOOPING 1

@@ -1,0 +1,56 @@
+name: Test allied cursors
+on:
+  push:
+    branches: ['feature/allied-cursors-test']
+permissions:
+  contents: read
+jobs:
+  behavior:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Protocol, lifecycle, privacy, rendering and existing controls
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/allied_cursor_protocol_test.cpp -o /tmp/allied-cursor-protocol
+          /tmp/allied-cursor-protocol
+          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/allied_cursor_geometry_test.cpp -o /tmp/allied-cursor-geometry
+          /tmp/allied-cursor-geometry
+          python3 src/DDraw/test/allied_cursor_draw_test.py
+          python3 src/DDraw/test/allied_cursor_controller_test.py
+          python3 src/DDraw/test/optional_unit_controls_test.py
+          python3 src/DDraw/test/mex_upgrade_test.py
+          python3 src/DDraw/test/mex_upgrade_menu_io_test.py
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: escalation, mod: ESCALATION, base: false, cursors: 1}
+          - {name: escalation-base-controls, mod: ESCALATION, base: true, cursors: 1}
+          - {name: prota, mod: PROTA, base: false, cursors: 0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_x86
+      - name: Build cursor test DLL
+        shell: pwsh
+        run: |
+          $buildArgs = @('src/DDraw/ddraw.vcxproj', '/p:Configuration=ReleasePublic', '/p:Platform=Win32', '/p:TDRAW_CONFIG=TDRAW_CONFIG_${{ matrix.mod }}')
+          if ('${{ matrix.base }}' -eq 'true') {
+            $buildArgs += @('/p:DRAWN_MOVE_FORMATIONS_ENABLE=0', '/p:MEX_UPGRADE_ENABLE=0', '/p:GRID_BUILDING_ENABLE=0')
+          }
+          & msbuild @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Verify expected cursor feature
+        run: python src/DDraw/test/verify_allied_cursors.py src/DDraw/Public/tdraw.dll --enabled ${{ matrix.cursors }}
+      - name: Verify Windows 7 imports
+        run: python src/DDraw/tools/check_win7_imports.py src/DDraw/Public/tdraw.dll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: allied-cursors-${{ matrix.name }}
+          path: |
+            src/DDraw/Public/tdraw.dll
+            src/DDraw/Public/tdraw.map
+            src/DDraw/Public/tdraw.pdb

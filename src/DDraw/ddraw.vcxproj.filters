@@ -141,6 +141,8 @@
     </ClCompile>
     <ClCompile Include="DrawnMove.cpp" />
     <ClCompile Include="MexUpgrade.cpp" />
+    <ClCompile Include="AlliedCursors.cpp" />
+    <ClCompile Include="AlliedCursorDraw.cpp" />
     <ClCompile Include="tahook.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -529,6 +531,10 @@
     </ClInclude>
     <ClInclude Include="DrawnMove.h" />
     <ClInclude Include="MexUpgrade.h" />
+    <ClInclude Include="AlliedCursors.h" />
+    <ClInclude Include="AlliedCursorDraw.h" />
+    <ClInclude Include="AlliedCursorProtocol.h" />
+    <ClInclude Include="AlliedCursorGeometry.h" />
     <ClInclude Include="MexUpgradeMenu.h" />
     <ClInclude Include="OptionalUnitControls.h" />
     <ClInclude Include="DrawnMoveGeometry.h" />

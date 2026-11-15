@@ -45,6 +45,7 @@ using namespace std;
 #include "AirCorpseFall.h"
 #include "PacketChatRouter.h"
 #include "AlliedBuildQueueSync.h"
+#include "AlliedCursors.h"
 #include "VoteReject.h"
 #include "ShareGuard.h"
 #include "ShareUnitSettings.h"
@@ -249,6 +250,9 @@ bool APIENTRY DllMain(HINSTANCE hinst, unsigned long reason, void*)
 			INLINE_5BYTESLAGGERJMP, AddtionInitAfterDDraw);
 
 		PacketChatRouter::GetInstance();
+#if ALLIED_CURSORS_ENABLE
+        AlliedCursors::Install();
+#endif
 		TakeClaim::Install();          // owns the _ShowText hook; ShareGuard rides it
 #if ALLIED_BUILD_QUEUE_ENABLE
 		AlliedBuildQueueSync::Install();
