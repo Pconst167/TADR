@@ -38,7 +38,7 @@ jobs:
       - name: Build patch DLL
         run: msbuild src/DDraw/ddraw.vcxproj /p:Configuration=ReleasePublic /p:Platform=Win32 /p:TDRAW_CONFIG=TDRAW_CONFIG_${{ matrix.mod }}
       - name: Verify radar overlay support
-        run: python -c "from pathlib import Path; assert b'[MainMapRadar] build=contacts-v1' in Path('src/DDraw/Public/tdraw.dll').read_bytes()"
+        run: python -c "from pathlib import Path; assert b'[MainMapRadar] build=contacts-v2-large' in Path('src/DDraw/Public/tdraw.dll').read_bytes()"
       - name: Verify Windows 7 imports
         run: python src/DDraw/tools/check_win7_imports.py src/DDraw/Public/tdraw.dll
       - name: Verify earlier features in the combined build

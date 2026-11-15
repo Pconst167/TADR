@@ -11,8 +11,12 @@
 #include "SmallMapViewport.h"
 #include "MainMapRadar.h"
 
+#include <cstring>
+
 namespace
 {
+    constexpr int kContactScale = 2;
+
     bool MegamapActive()
     {
 #if USEMEGAMAP
@@ -30,6 +34,45 @@ namespace
         using DrawFrame = void (__stdcall*)(OFFSCREEN*, GAFFrame*, int, int);
         reinterpret_cast<DrawFrame>(0x004B7F90u)(surface, frame, x, y);
     }
+
+    void DrawScaledContact(OFFSCREEN* surface, GAFFrame* frame, int x, int y)
+    {
+        // Decode through TA so compressed mod sprites keep their original colors
+        // and transparency. The buffer belongs to this call, not a loaded world.
+        BYTE icon[64 * 64];
+        std::memset(icon, frame->Background, static_cast<size_t>(frame->Width) * frame->Height);
+        OFFSCREEN decoded = *surface;
+        decoded.Width = decoded.lPitch = frame->Width;
+        decoded.Height = frame->Height;
+        decoded.lpSurface = icon;
+        decoded.ScreenRect = {0, 0, frame->Width - 1, frame->Height - 1};
+        DrawContactFrame(&decoded, frame, static_cast<short>(frame->xPosition),
+            static_cast<short>(frame->yPosition));
+
+        const int left = x - static_cast<short>(frame->xPosition) * kContactScale;
+        const int top = y - static_cast<short>(frame->yPosition) * kContactScale;
+        auto* pixels = static_cast<BYTE*>(surface->lpSurface);
+        const RECT& clip = surface->ScreenRect;
+        for (int row = 0; row < frame->Height; ++row)
+        {
+            for (int column = 0; column < frame->Width; ++column)
+            {
+                const BYTE color = icon[row * frame->Width + column];
+                if (color == frame->Background) continue;
+                for (int dy = 0; dy < kContactScale; ++dy)
+                {
+                    const int screenY = top + row * kContactScale + dy;
+                    if (screenY < clip.top || screenY > clip.bottom) continue;
+                    for (int dx = 0; dx < kContactScale; ++dx)
+                    {
+                        const int screenX = left + column * kContactScale + dx;
+                        if (screenX >= clip.left && screenX <= clip.right)
+                            pixels[static_cast<size_t>(screenY) * surface->lPitch + screenX] = color;
+                    }
+                }
+            }
+        }
+    }
 }
 
 bool MainMapRadar::Enabled()
@@ -37,7 +80,7 @@ bool MainMapRadar::Enabled()
     if (!MyConfig) return false;
     static const bool enabled = [] {
         const bool active = MyConfig->GetIniBool("MainMapRadarContacts", TRUE) != FALSE;
-        if (active) IDDrawSurface::OutptTxt("[MainMapRadar] build=contacts-v1");
+        if (active) IDDrawSurface::OutptTxt("[MainMapRadar] build=contacts-v2-large");
         return active;
     }();
     return enabled;
@@ -106,10 +149,11 @@ void MainMapRadar::Draw(TAdynmemStruct* ta, _OFFSCREEN* surface)
         const int height = altitude / 2 - (altitude < 0 && altitude % 2 != 0 ? 1 : 0);
         const int y = static_cast<short>(unit.YPos) - height
             - ta->EyeBallMapYPos + r.top;
-        const int left = x - static_cast<short>(frame->xPosition);
-        const int top = y - static_cast<short>(frame->yPosition);
+        const int left = x - static_cast<short>(frame->xPosition) * kContactScale;
+        const int top = y - static_cast<short>(frame->yPosition) * kContactScale;
         if (left >= clip.right || top >= clip.bottom
-            || left + frame->Width <= clip.left || top + frame->Height <= clip.top) continue;
-        DrawContactFrame(&destination, frame, x, y);
+            || left + frame->Width * kContactScale <= clip.left
+            || top + frame->Height * kContactScale <= clip.top) continue;
+        DrawScaledContact(&destination, frame, x, y);
     }
 }

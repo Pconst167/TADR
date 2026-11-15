@@ -381,6 +381,8 @@ NEW FEATURES IN DETAIL:
   radar and sonar contacts over the normal map's fog of war. Enabled by default;
   set it to FALSE and restart TA to disable it.
 
+  Battlefield markers use twice the native minimap sprite size for readability.
+
   Markers follow the same current sensor contacts as the minimap, including
   shared sensors, enemy jamming and the viewed player's perspective in replays.
   Units in visual line of sight use their normal models. Radar-only contacts

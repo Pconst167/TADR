@@ -119,10 +119,12 @@ struct Minimap { Control* Controler = nullptr; } minimap;
 struct Expand { Minimap* myMinimap = nullptr; } expand;
 Expand* GUIExpander = nullptr;
 TAdynmemStruct* currentWorld = nullptr;
-int losCalls = 0, drawCalls = 0, frameCalls = 0;
+int losCalls = 0, drawCalls = 0, frameCalls = 0, compressedCalls = 0;
 int lastViewedPlayer = -1, lastFrame = -1;
 int lastX = 0, lastY = 0;
 RECT lastClip = {};
+_OFFSCREEN* gameSurface = nullptr;
+BYTE* expandedFrame = nullptr;
 int los[16] = {};
 int CheckUnitInPlayerLOS(PlayerStruct* player, UnitStruct* unit) {
     assert(currentWorld && player >= currentWorld->Players && player < currentWorld->Players+10);
@@ -137,11 +139,20 @@ GAFFrame* Index2Frame_InSequence(GAFSequence* sequence, int frame) {
 }
 void MockDrawContactFrame(_OFFSCREEN* surface, GAFFrame* frame, int x, int y) {
     assert(surface && frame);
+    // Production must let TA decode the original asset privately, even when
+    // the eventual marker is clipped on the battlefield or is compressed.
+    assert(gameSurface && surface != gameSurface && surface->lpSurface != gameSurface->lpSurface);
+    assert(surface->Width==frame->Width && surface->Height==frame->Height && surface->lPitch==frame->Width);
+    assert(surface->ScreenRect.left==0 && surface->ScreenRect.top==0
+        && surface->ScreenRect.right==frame->Width-1 && surface->ScreenRect.bottom==frame->Height-1);
+    assert(x==static_cast<short>(frame->xPosition) && y==static_cast<short>(frame->yPosition));
     ++drawCalls; lastX = x; lastY = y; lastClip = surface->ScreenRect;
+    const BYTE* decoded = frame->Compressed ? expandedFrame : frame->PtrFrameBits;
+    if (frame->Compressed) { ++compressedCalls; assert(decoded); }
     for (int iy=0; iy<frame->Height; ++iy) for (int ix=0; ix<frame->Width; ++ix) {
         const int dx = x + ix - static_cast<short>(frame->xPosition);
         const int dy = y + iy - static_cast<short>(frame->yPosition);
-        const BYTE value = frame->PtrFrameBits[iy*frame->Width+ix];
+        const BYTE value = decoded[iy*frame->Width+ix];
         if (value == frame->Background || dx < surface->ScreenRect.left || dx > surface->ScreenRect.right
             || dy < surface->ScreenRect.top || dy > surface->ScreenRect.bottom) continue;
         assert(dx >= 0 && dx < surface->Width && dy >= 0 && dy < surface->Height);
@@ -163,14 +174,14 @@ struct World {
     RadarUnit_ contacts[16];
     PlayerInfoStruct info[10];
     GAFSequence logo;
-    BYTE icon[16] = {9,211,211,9,211,211,211,211,211,211,211,211,9,211,211,9};
+    BYTE icon[16] = {9,211,212,9,213,214,0,216,217,218,219,220,9,221,222,9};
     GAFFrame frame = {4,4,2,2,9,0,0,0,icon,0};
     static constexpr int width = 640, height = 480, pitch = 648, guard = 32;
     std::vector<BYTE> pixels = std::vector<BYTE>(guard+pitch*height+guard,0xcc);
     _OFFSCREEN surface;
     World() {
         shared = SharedData{}; DataShare = &shared;
-        losCalls = drawCalls = frameCalls = 0; lastViewedPlayer = lastFrame = -1;
+        losCalls = drawCalls = frameCalls = compressedCalls = 0; lastViewedPlayer = lastFrame = -1;
         std::fill(los,los+16,0);
         currentWorld = &ta;
         ta.BeginUnitsArray_p = units; ta.EndOfUnitsArray_p = units+15;
@@ -188,6 +199,7 @@ struct World {
         ta.radlogo = ta.radlogohigh = &logo;
         surface.Width = width; surface.Height = height; surface.lPitch = pitch;
         surface.lpSurface = pixels.data()+guard; surface.ScreenRect = {0,0,width-1,height-1};
+        gameSurface = &surface; expandedFrame = nullptr;
         control.active = false; minimap.Controler = &control; expand.myMinimap = &minimap; GUIExpander = &expand;
     }
     void Draw() { MainMapRadar::Draw(&ta,&surface); }
@@ -200,7 +212,7 @@ struct World {
 
 void ResetPaint(World& world) {
     std::fill(world.pixels.begin(),world.pixels.end(),0xcc);
-    losCalls = drawCalls = frameCalls = 0;
+    losCalls = drawCalls = frameCalls = compressedCalls = 0;
 }
 bool SameRect(RECT a, RECT b) {
     return a.left==b.left && a.top==b.top && a.right==b.right && a.bottom==b.bottom;
@@ -215,6 +227,24 @@ void ScreenCenter(World& world, int x, int y) {
     world.units[2].XPos = static_cast<unsigned short>(x-world.ta.GameSreen_Rect.left+world.ta.EyeBallMapXPos);
     world.units[2].YPos = static_cast<unsigned short>(y-world.ta.GameSreen_Rect.top+world.ta.EyeBallMapYPos+world.units[2].ZPos/2);
 }
+void ExactScaledReplica(const World& world, int centerX, int centerY, RECT clip) {
+    const int left = centerX - static_cast<short>(world.frame.xPosition)*2;
+    const int top = centerY - static_cast<short>(world.frame.yPosition)*2;
+    int changed = 0;
+    for (int y=0; y<World::height; ++y) for (int x=0; x<World::width; ++x) {
+        BYTE expected = 0xcc;
+        if (x>=clip.left && x<=clip.right && y>=clip.top && y<=clip.bottom
+            && x>=left && x<left+world.frame.Width*2 && y>=top && y<top+world.frame.Height*2) {
+            const BYTE source = world.icon[((y-top)/2)*world.frame.Width+(x-left)/2];
+            if (source != world.frame.Background) expected = source;
+        }
+        assert(world.pixels[World::guard+y*World::pitch+x] == expected);
+        if (expected != 0xcc) ++changed;
+    }
+    if (left>=clip.left && top>=clip.top && left+world.frame.Width*2-1<=clip.right
+        && top+world.frame.Height*2-1<=clip.bottom) assert(changed==48);
+    world.CheckGuards();
+}
 void TestDetectedContactsAndProjection() {
     World world;
     const RECT originalClip = world.surface.ScreenRect;
@@ -223,7 +253,8 @@ void TestDetectedContactsAndProjection() {
     UnitStruct snapshot[16]; std::memcpy(snapshot,world.units,sizeof(snapshot));
     world.Draw();
     assert(drawCalls==1 && frameCalls==1 && lastViewedPlayer==0 && lastFrame==1);
-    assert(lastX==268 && lastY==166);
+    assert(lastX==2 && lastY==2); // Native decoder receives its hotspot; projection is verified in actual output.
+    ExactScaledReplica(world,268,166,world.ta.GameSreen_Rect);
     assert(!world.Unchanged() && SameRect(originalClip,world.surface.ScreenRect));
     assert(std::memcmp(snapshot,world.units,sizeof(snapshot))==0);
     OnlyInside(world,world.ta.GameSreen_Rect);
@@ -233,7 +264,8 @@ void TestDetectedContactsAndProjection() {
     }
     for (const auto& altitude : std::vector<std::pair<int,int>>{{-20,192},{-1,183},{-3,184},{1,182},{3,181}}) {
         ResetPaint(world); world.units[2].ZPos = static_cast<unsigned short>(altitude.first);
-        world.Draw(); assert(drawCalls==1 && lastY==altitude.second);
+        world.Draw(); assert(drawCalls==1);
+        ExactScaledReplica(world,268,altitude.second,world.ta.GameSreen_Rect);
         OnlyInside(world,world.ta.GameSreen_Rect); // Native signed SAR handles odd submerged heights.
     }
 
@@ -343,17 +375,39 @@ void TestSurfaceClippingAndMargins() {
         {127,100},{512,100},{200,31},{200,384}}) {
         World world; ScreenCenter(world,center.x,center.y); const RECT before = world.surface.ScreenRect;
         world.Draw(); OnlyInside(world,world.ta.GameSreen_Rect);
+        ExactScaledReplica(world,center.x,center.y,world.ta.GameSreen_Rect);
         assert(SameRect(world.surface.ScreenRect,before));
     }
     World inset; inset.surface.ScreenRect = {260,160,269,169};
     const RECT before = inset.surface.ScreenRect;
     inset.Draw(); assert(!inset.Unchanged()); OnlyInside(inset,before);
+    ExactScaledReplica(inset,268,166,before);
     assert(SameRect(inset.surface.ScreenRect,before));
 
     World margin; margin.ta.EyeBallMapXPos = -100; margin.ta.EyeBallMapYPos = -50;
     margin.ta.MapSizeX = 100; margin.ta.MapSizeY = 80;
     margin.units[2].XPos = 5; margin.units[2].YPos = 15; margin.units[2].ZPos = 0;
     margin.Draw(); assert(!margin.Unchanged()); OnlyInside(margin,{228,82,327,161});
+    ExactScaledReplica(margin,233,97,{228,82,327,161});
+}
+void TestScaledHotspotAndCompressedAssets() {
+    World shifted; shifted.frame.xPosition = 1; shifted.frame.yPosition = 3;
+    shifted.Draw(); assert(drawCalls==1 && lastX==1 && lastY==3);
+    ExactScaledReplica(shifted,268,166,shifted.ta.GameSreen_Rect);
+
+    World compressed; BYTE encoded[] = {0xa5};
+    compressed.frame.Compressed = 1; compressed.frame.PtrFrameBits = encoded;
+    expandedFrame = compressed.icon;
+    const RECT before = compressed.surface.ScreenRect;
+    compressed.Draw(); assert(drawCalls==1 && compressedCalls==1);
+    ExactScaledReplica(compressed,268,166,compressed.ta.GameSreen_Rect);
+    assert(SameRect(compressed.surface.ScreenRect,before));
+
+    // The original four-pixel marker would have been culled here; the larger
+    // marker still overlaps the viewport and must be clipped, not disappear.
+    World overlap; ScreenCenter(overlap,125,100);
+    overlap.Draw(); assert(drawCalls==1 && !overlap.Unchanged());
+    ExactScaledReplica(overlap,125,100,overlap.ta.GameSreen_Rect);
 }
 
 int main(int argc, char** argv) {
@@ -368,6 +422,7 @@ int main(int argc, char** argv) {
         TestInvalidContactAndWorldState();
         TestViewPlayerAndMegamap();
         TestSurfaceClippingAndMargins();
+        TestScaledHotspotAndCompressedAssets();
     }
     std::cout << "Normal-map radar regression tests passed (enabled=" << config.active << ")\n";
 }
