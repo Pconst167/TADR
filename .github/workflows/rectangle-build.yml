@@ -46,7 +46,7 @@ jobs:
         run: python src/DDraw/tools/check_win7_imports.py src/DDraw/Public/tdraw.dll
       - name: Verify both earlier patches remain in the combined test DLL
         if: github.ref == 'refs/heads/feature/rectangle-build-test'
-        run: python -c "from pathlib import Path; b=Path('src/DDraw/Public/tdraw.dll').read_bytes(); assert '${{ matrix.mod }}' == 'OTA' or b'[DrawnMove] build=alt-v6' in b; assert (b'[MexUpgrade] build=escalation-tiers-v6' in b) == ('${{ matrix.mod }}' == 'ESCALATION')"
+        run: python -c "from pathlib import Path; b=Path('src/DDraw/Public/tdraw.dll').read_bytes(); assert '${{ matrix.mod }}' == 'OTA' or b'[DrawnMove] build=alt-v6' in b; assert (b'[MexUpgrade] build=escalation-offset-v7' in b) == ('${{ matrix.mod }}' == 'ESCALATION')"
       - uses: actions/upload-artifact@v4
         with:
           name: rectangle-${{ matrix.mod }}

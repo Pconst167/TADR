@@ -7,6 +7,7 @@
 #include "Gaf.h"
 #include "MexUpgrade.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -171,12 +172,26 @@ namespace
         return true;
     }
 
-    bool CheckReplacementSite(const TAdynmemStruct& ta, PlayerStruct& owner,
-        const UnitStruct& old, unsigned slot, const UnitDefStruct& def, Position_Dword& position, unsigned& blocker)
+    bool ReplacementContainsTarget(const UnitStruct& old, const UnitDefStruct& def, int left, int top)
     {
-        int left, top;
-        if (!def.YardMap || !ReplacementTile(old, def, left, top)) return false;
-        if (left + def.FootX > ta.FeatureMapSizeX || top + def.FootY > ta.FeatureMapSizeY)
+        return def.FootX > 0 && def.FootY > 0
+            && def.FootX <= kMaxUpgradeFootprint && def.FootY <= kMaxUpgradeFootprint
+            && old.SizeFootX > 0 && old.SizeFootZ > 0
+            && old.SizeFootX <= def.FootX && old.SizeFootZ <= def.FootY
+            && old.XGridPos >= 0 && old.YGridPos >= 0 && left >= 0 && top >= 0
+            && left <= old.XGridPos && top <= old.YGridPos
+            && left + def.FootX >= old.XGridPos + old.SizeFootX
+            && top + def.FootY >= old.YGridPos + old.SizeFootZ;
+    }
+
+    bool CheckReplacementTile(const TAdynmemStruct& ta, PlayerStruct& owner,
+        const UnitStruct& old, unsigned slot, const UnitDefStruct& def, int left, int top,
+        Position_Dword& position, unsigned& blocker)
+    {
+        if (!def.YardMap || def.FootX <= 0 || def.FootY <= 0
+            || def.FootX > kMaxUpgradeFootprint || def.FootY > kMaxUpgradeFootprint
+            || left < 0 || top < 0
+            || left + def.FootX > ta.FeatureMapSizeX || top + def.FootY > ta.FeatureMapSizeY)
             return false;
 
         // TestGridSpot can ignore one occupant by slot. Its earlier yard check also
@@ -216,6 +231,48 @@ namespace
         position.Y = static_cast<unsigned short>(top * 16 + def.FootY * 8);
         position.Z = static_cast<unsigned short>(gridHeight());
         return true;
+    }
+
+    bool CheckReplacementSite(const TAdynmemStruct& ta, PlayerStruct& owner,
+        const UnitStruct& old, unsigned slot, const UnitDefStruct& def, Position_Dword& position, unsigned& blocker)
+    {
+        // TA extracts from the footprint's metal cells. Cover every cell used by
+        // the old extractor, even when moving the replacement around a windmill.
+        if (!def.YardMap || !ReplacementContainsTarget(old, def, old.XGridPos, old.YGridPos))
+            return false;
+
+        const int centeredLeft = (static_cast<int>(old.XPos) + 8 - def.FootX * 8) / 16;
+        const int centeredTop = (static_cast<int>(old.YPos) + 8 - def.FootY * 8) / 16;
+        int left, top;
+        const bool centered = ReplacementTile(old, def, left, top)
+            && ReplacementContainsTarget(old, def, left, top);
+        if (centered
+            && CheckReplacementTile(ta, owner, old, slot, def, left, top, position, blocker))
+            return true;
+
+        struct Site { int left, top, distance; };
+        Site sites[kMaxUpgradeFootprint * kMaxUpgradeFootprint];
+        unsigned count = 0;
+        for (top = old.YGridPos + old.SizeFootZ - def.FootY; top <= old.YGridPos; ++top)
+        {
+            for (left = old.XGridPos + old.SizeFootX - def.FootX; left <= old.XGridPos; ++left)
+            {
+                if ((centered && left == centeredLeft && top == centeredTop) || left < 0 || top < 0
+                    || left + def.FootX > ta.FeatureMapSizeX || top + def.FootY > ta.FeatureMapSizeY)
+                    continue;
+                const int dx = left - centeredLeft, dy = top - centeredTop;
+                sites[count++] = {left, top, dx * dx + dy * dy};
+            }
+        }
+        std::sort(sites, sites + count, [](const Site& a, const Site& b) {
+            if (a.distance != b.distance) return a.distance < b.distance;
+            if (a.top != b.top) return a.top < b.top;
+            return a.left < b.left;
+        });
+        for (unsigned i = 0; i < count; ++i)
+            if (CheckReplacementTile(ta, owner, old, slot, def,
+                sites[i].left, sites[i].top, position, blocker)) return true;
+        return false;
     }
 
     bool CanReclaim(UnitStruct* constructor, UnitStruct* target)
@@ -320,10 +377,12 @@ namespace
             || build.State != 0 || build.AttackTargat) return false;
         const auto& def = ta.UnitDef[build.BuildUnitID];
         if (_strnicmp(def.UnitName, replacement, sizeof(def.UnitName)) != 0) return false;
-        int left, top;
-        return ReplacementTile(target, def, left, top)
-            && build.Pos.X == left * 16 + def.FootX * 8 && build.Pos.Y == top * 16 + def.FootY * 8
-            && build.Pos.x_ == 0 && build.Pos.y_ == 0;
+        const int x = static_cast<int>(build.Pos.X) - def.FootX * 8;
+        const int y = static_cast<int>(build.Pos.Y) - def.FootY * 8;
+        if (x < 0 || y < 0 || x % 16 || y % 16 || build.Pos.x_ || build.Pos.y_) return false;
+        const int left = x / 16, top = y / 16;
+        return ReplacementContainsTarget(target, def, left, top)
+            && left + def.FootX <= ta.FeatureMapSizeX && top + def.FootY <= ta.FeatureMapSizeY;
     }
 
     bool CancelUpgrade(TAdynmemStruct& ta, const Upgrade& upgrade, Actions actions)
@@ -413,7 +472,7 @@ bool MexUpgrade::Enabled()
     if (!MyConfig) return false;
     static const bool enabled = [] {
         const bool active = MyConfig->GetIniBool("MexUpgrade", TRUE) != FALSE;
-        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] build=escalation-tiers-v6");
+        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] build=escalation-offset-v7");
         return active;
     }();
     return enabled;

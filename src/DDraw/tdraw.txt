@@ -257,6 +257,9 @@ NEW FEATURES IN BRIEF:
   cancel its upgrade. A plain click replaces the current order queue.
   The larger replacement footprint is checked before reclaim is ordered;
   terrain, water depth and other occupants must permit construction.
+  If the centered footprint is blocked, the nearest valid offset is used.
+  It must still cover the old extractor's whole footprint to retain its metal
+  tiles. This also works around adjacent buildings on underwater deposits.
 
   Enabled by default in Escalation. Set MexUpgrade=FALSE under [Preferences]
   to disable it, then restart TA. Other mod profiles leave upgrades disabled.
