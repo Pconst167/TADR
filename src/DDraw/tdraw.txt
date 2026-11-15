@@ -246,6 +246,21 @@ NEW FEATURES IN BRIEF:
 - Diagnostic logging for crashes 004cbed5 and 0049cf19
 - Building rotation: press '/' (configurable) to cycle the build cursor
   facing for buildings whose FBI permits it (see NEW FEATURES IN DETAIL)
+- One-click metal extractor upgrades (Escalation)
+
+  Select a constructor and click one of your completed metal extractors to
+  reclaim it and build the next tier at the same site. The constructor must
+  have the replacement in its build menu. ARM and CORE land and underwater
+  extractors support T1 -> T2 Moho -> T3 Mantle, one tier per upgrade.
+
+  Hold Shift to queue upgrades. Shift-click a queued extractor again to
+  cancel its upgrade. A plain click replaces the current order queue.
+  The larger replacement footprint is checked before reclaim is ordered;
+  terrain, water depth and other occupants must permit construction.
+
+  Enabled by default in Escalation. Set MexUpgrade=FALSE under [Preferences]
+  to disable it, then restart TA. Other mod profiles leave upgrades disabled.
+
 - Nanoframe ghost preview at the build cursor (see NEW FEATURES IN DETAIL)
 - Fix for ctrl-z (and ctrl-a / ctrl-b / ctrl-c) silently truncating selections for unit ids >= 512
 - Export engine-backed player elimination status to gpgnet4ta via shared memory,

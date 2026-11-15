@@ -19,6 +19,7 @@ jobs:
           /tmp/build-rectangle-test
           python3 src/DDraw/test/build_rectangle_input_test.py
           python3 src/DDraw/test/build_rectangle_gesture_test.py
+          python3 src/DDraw/test/mex_upgrade_test.py
       - name: Check existing formation controls in the combined test build
         if: hashFiles('src/DDraw/test/drawn_move_input_test.py') != ''
         run: |
@@ -44,8 +45,8 @@ jobs:
       - name: Verify Windows 7 imports
         run: python src/DDraw/tools/check_win7_imports.py src/DDraw/Public/tdraw.dll
       - name: Verify both earlier patches remain in the combined test DLL
-        if: github.ref == 'refs/heads/feature/rectangle-build-test' && matrix.mod != 'OTA'
-        run: python -c "from pathlib import Path; b=Path('src/DDraw/Public/tdraw.dll').read_bytes(); assert b'[DrawnMove] build=alt-v6' in b; assert b'[MexUpgrade] queued' in b"
+        if: github.ref == 'refs/heads/feature/rectangle-build-test'
+        run: python -c "from pathlib import Path; b=Path('src/DDraw/Public/tdraw.dll').read_bytes(); assert '${{ matrix.mod }}' == 'OTA' or b'[DrawnMove] build=alt-v6' in b; assert (b'[MexUpgrade] build=escalation-tiers-v6' in b) == ('${{ matrix.mod }}' == 'ESCALATION')"
       - uses: actions/upload-artifact@v4
         with:
           name: rectangle-${{ matrix.mod }}
