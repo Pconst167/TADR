@@ -20,6 +20,7 @@ STUBS = r'''
 #include <vector>
 #include "AlliedCursors.h"
 #include "AlliedCursorGeometry.h"
+class Label; // Existing UI class declared by the real dialog headers.
 using HWND = void*;
 struct POINT { int x, y; };
 struct RECT { int left, top, right, bottom; };

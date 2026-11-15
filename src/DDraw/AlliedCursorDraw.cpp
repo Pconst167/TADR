@@ -111,7 +111,7 @@ namespace
         return font.data + offset + 1;
     }
 
-    void Label(const Geometry::Surface& surface, const Font& font, int centerX, int centerY,
+    void DrawNameLabel(const Geometry::Surface& surface, const Font& font, int centerX, int centerY,
         int radius, const char (&name)[32], unsigned char color)
     {
         int count = 0, width = 0;
@@ -217,7 +217,7 @@ namespace AlliedCursorDraw
             const int radius = mega ? 4 : 12;
             Geometry::Halo(surface, x, y, radius, color, Blends(color));
             // White text with a black outline stays legible for dark player colours.
-            Label(surface, font, x, y, radius, view.name, 255);
+            DrawNameLabel(surface, font, x, y, radius, view.name, 255);
         }
     }
 }
