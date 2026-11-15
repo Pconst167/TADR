@@ -49,9 +49,26 @@ constexpr int TRUE = 1, FALSE = 0;
 constexpr unsigned builder = 1, canfly = 2, WATCH = 4;
 constexpr int UnitSelected_State = 0x10, Player_LocalHuman = 1, TAInGame = 1;
 constexpr unsigned MK_CONTROL = 8, MK_SHIFT = 4, MK_RBUTTON = 2, MK_LBUTTON = 1;
-constexpr unsigned WM_LBUTTONUP = 0x202, WM_RBUTTONDOWN = 0x204, VK_MENU = 0x12;
+constexpr unsigned WM_LBUTTONUP = 0x202, WM_RBUTTONDOWN = 0x204, VK_CONTROL = 0x11, VK_MENU = 0x12;
 namespace ordertype { constexpr int STOP = 1; }
 struct Position_Dword { std::uint16_t x_, X, z_, Z, y_, Y; };
+struct GAFFrame {
+    unsigned short Width, Height, xPosition, yPosition;
+    unsigned char Background, Compressed;
+    unsigned short FramePointers;
+    unsigned Unknown0;
+    unsigned char* PtrFrameBits;
+    unsigned FPS;
+};
+struct GAFENTRY { GAFFrame* PtrFrame; int Animated; };
+struct GAFSequence {
+    unsigned short Frames;
+    unsigned Signature;
+    unsigned short Padding;
+    char Name[32];
+    GAFENTRY PtrFrameAry[1];
+};
+struct DesktopGUI { void* Cursor_3 = nullptr; };
 struct UnitDefStruct {
     char UnitName[32] = {};
     short* CANBUILD_ptr = nullptr;
@@ -98,6 +115,9 @@ struct TAdynmemStruct {
     UnitStruct* BeginUnitsArray_p = nullptr;
     UnitStruct* EndOfUnitsArray_p = nullptr;
     PlayerStruct Players[10];
+    unsigned CurrentCursora_Index = 0;
+    GAFSequence* cursor_ary[4] = {};
+    DesktopGUI desktopGUI;
 };
 struct _MOUSEEVENT { unsigned fwKeys = 0, Msg = WM_LBUTTONUP; };
 struct SharedData { int TAProgress = TAInGame; bool PlayingDemo = false; } shared;
@@ -116,7 +136,14 @@ struct IDDrawSurface {
     static void OutptTxt(const char*) {}
     template<class... Args> static void OutptFmtTxt(const char*, Args...) {}
 };
-static short GetAsyncKeyState(unsigned) { return 0; }
+static bool controlDown, altDown;
+static int cursorChanges;
+static short GetAsyncKeyState(unsigned key) {
+    return ((key == VK_CONTROL && controlDown) || (key == VK_MENU && altDown)) ? -32768 : 0;
+}
+static void SetUICursor(DesktopGUI* desktop, GAFSequence* cursor) {
+    desktop->Cursor_3 = cursor; ++cursorChanges;
+}
 struct Upgrade { UnitStruct* constructor; UnitStruct* target; const char* replacement; int type; Position_Dword buildPos; };
 struct UpgradePair { const char* from; const char* to; };
 struct Actions { unsigned reclaim, build; };
@@ -171,6 +198,7 @@ namespace MexUpgrade {
     bool Enabled();
     bool TryCommand(TAdynmemStruct*, const _MOUSEEVENT*);
     bool IsQueuedBuild(const TAdynmemStruct*, const UnitStruct*, const UnitOrdersStruct*);
+    void UpdateCursor(TAdynmemStruct*);
 }
 
 // PRODUCTION_FUNCTIONS
@@ -187,10 +215,12 @@ struct World {
     short canbuild[3] = {3,4,0};
     std::vector<FeatureStruct> map = std::vector<FeatureStruct>(32*32);
     std::vector<char> yard;
+    GAFSequence stockCursor = {}, otherCursor = {};
     World(int footX = 7, int footY = 7) : yard(footX * footY, 3) {
         gridAllowed = reclaimAllowed = true; checkingSite = false;
         gridCalls = nativeSends = removedOrders = 0; probedYard.clear(); allocatedOrders.clear();
         allowedGridSites.clear(); probedSites.clear();
+        controlDown = altDown = false; cursorChanges = 0;
         shared = SharedData{};
         ta.UnitDef = defs; ta.FeatureMap = map.data();
         ta.BeginUnitsArray_p = units; ta.EndOfUnitsArray_p = units+8;
@@ -210,6 +240,7 @@ struct World {
         units[2].SizeFootX = units[2].SizeFootZ = 5;
         for (int y = 18; y < 23; ++y) for (int x = 18; x < 23; ++x) map[y*32+x].occupyingUnitNumber = 2;
         originalYard = yard.data();
+        ta.cursor_ary[0] = &stockCursor; ta.desktopGUI.Cursor_3 = &stockCursor;
     }
     UnitStruct& old() { return units[2]; }
     UnitDefStruct& replacement() { return defs[3]; }
@@ -506,6 +537,124 @@ static void TestOffsetQueueAndCancellation() {
     assert(removedOrders == 0 && world.units[1].UnitOrders == reclaim && reclaim->NextOrder);
 }
 
+static GAFSequence* DisplayedCursor(World& world) {
+    return reinterpret_cast<GAFSequence*>(world.ta.desktopGUI.Cursor_3);
+}
+
+static int CursorPixels(GAFSequence* cursor, unsigned char color) {
+    assert(cursor && cursor->Frames == 1 && cursor->Signature == 1);
+    const auto* frame = cursor->PtrFrameAry[0].PtrFrame;
+    assert(frame && frame->Width == 13 && frame->Height == 14 && frame->Background == 9);
+    assert(!frame->Compressed && frame->PtrFrameBits);
+    return std::count(frame->PtrFrameBits,frame->PtrFrameBits+13*14,color);
+}
+
+static void AssertBlockedCursor(GAFSequence* cursor) {
+    assert(CursorPixels(cursor,211) > 0 && CursorPixels(cursor,232) == 0);
+    const auto* frame = cursor->PtrFrameAry[0].PtrFrame;
+    assert(frame->xPosition == 6 && frame->yPosition == 6);
+    // A red X has branches at both upper corners and its center, rather
+    // than the up-arrow's colored tip at the top center.
+    assert(frame->PtrFrameBits[0] != 9 && frame->PtrFrameBits[12] != 9);
+    assert(frame->PtrFrameBits[6] == 9 && frame->PtrFrameBits[6*13+6] == 211);
+}
+
+static void TestUpgradeCursorTransitions() {
+    for (int interface : {0,1}) {
+        World world; world.ta.InterfaceType = interface;
+        if (interface) world.ta.BuildSpotState |= 4;
+        MexUpgrade::UpdateCursor(&world.ta);
+        auto* green = DisplayedCursor(world);
+        assert(green != &world.stockCursor && CursorPixels(green,232) > 0);
+        assert(green->PtrFrameAry[0].PtrFrame->xPosition == 6
+            && green->PtrFrameAry[0].PtrFrame->yPosition == 0);
+        assert(nativeSends == 0 && removedOrders == 0 && !world.units[1].UnitOrders);
+        const int changes = cursorChanges;
+        MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == green && cursorChanges == changes);
+
+        WindmillCorner(world); MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == green && nativeSends == 0);
+        BlockAllLargerSites(world); MexUpgrade::UpdateCursor(&world.ta);
+        auto* red = DisplayedCursor(world);
+        assert(red != green && red != &world.stockCursor);
+        AssertBlockedCursor(red);
+        assert(nativeSends == 0 && removedOrders == 0 && !world.units[1].UnitOrders);
+        const int blockedChanges = cursorChanges;
+        MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == red && cursorChanges == blockedChanges);
+
+        // Modifier keys restore the native cursor and never probe or issue
+        // orders. Releasing them restores the blocked-upgrade cursor.
+        const int probes = gridCalls;
+        controlDown = true; MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == &world.stockCursor && gridCalls == probes);
+        controlDown = false; altDown = true; MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == &world.stockCursor && gridCalls == probes);
+        altDown = false; MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == red);
+
+        std::fill(world.map.begin(),world.map.end(),FeatureStruct{});
+        MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == green);
+        gridAllowed = false; MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == red && nativeSends == 0);
+        gridAllowed = true; MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == green);
+
+        // Wreck snapping and other patches own their custom cursors.
+        world.ta.desktopGUI.Cursor_3 = &world.otherCursor;
+        const int beforeProbes = gridCalls, beforeChanges = cursorChanges;
+        MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == &world.otherCursor && gridCalls == beforeProbes
+            && cursorChanges == beforeChanges);
+        world.ta.desktopGUI.Cursor_3 = &world.stockCursor;
+        world.ta.CurrentCursora_Index = 4;
+        MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == &world.stockCursor && cursorChanges == beforeChanges);
+        world.ta.CurrentCursora_Index = 0; world.ta.cursor_ary[0] = nullptr;
+        MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == &world.stockCursor && cursorChanges == beforeChanges);
+    }
+}
+
+static void TestUpgradeCursorContextAndCapability() {
+    for (int reason = 0; reason < 15; ++reason) {
+        World world; MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) != &world.stockCursor);
+        const int probes = gridCalls;
+        if (reason == 0) Name(world.defs[2],"ARMMAS"); // No further upgrade tier.
+        if (reason == 1) world.defs[2].extractsmetal = 0;
+        if (reason == 2) world.defs[1].CANBUILD_ptr = nullptr;
+        if (reason == 3) world.canbuild[0] = 0;
+        if (reason == 4) world.info.PropertyMask |= WATCH;
+        if (reason == 5) world.old().Owner_PlayerPtr0 = &world.ta.Players[1];
+        if (reason == 6) world.old().Nanoframe = .5f;
+        if (reason == 7) world.old().UnitSelected |= UnitSelected_State;
+        if (reason == 8) controlDown = true;
+        if (reason == 9) altDown = true;
+        if (reason == 10) shared.PlayingDemo = true;
+        if (reason == 11) world.ta.PrepareOrder_Type = 99;
+        if (reason == 12) world.ta.InterfaceType = 1; // No command mode bit.
+        if (reason == 13) world.defs[3].UnitTypeMask_0 = 0;
+        if (reason == 14) world.defs[1].UnitTypeMask_0 &= ~builder;
+        MexUpgrade::UpdateCursor(&world.ta);
+        assert(DisplayedCursor(world) == &world.stockCursor && gridCalls == probes);
+        assert(nativeSends == 0 && removedOrders == 0 && !world.units[1].UnitOrders);
+    }
+    for (int reason : {0,1}) {
+        World world; MexUpgrade::UpdateCursor(&world.ta);
+        auto* green = DisplayedCursor(world);
+        if (reason == 0) reclaimAllowed = false;
+        if (reason == 1) world.defs[3].buildLimit = 0;
+        MexUpgrade::UpdateCursor(&world.ta);
+        auto* red = DisplayedCursor(world);
+        assert(red != green && red != &world.stockCursor);
+        AssertBlockedCursor(red);
+        assert(nativeSends == 0 && removedOrders == 0);
+    }
+}
+
 int main(int argc, char** argv) {
     assert(argc == 2); config.active = std::string(argv[1]) == "1";
     assert(!MexUpgrade::Enabled()); // Missing config does not initialize the static cache.
@@ -527,6 +676,8 @@ int main(int argc, char** argv) {
     if (enabled) {
         TestShiftCancellationBeforeBlockedPreparation();
         TestOffsetQueueAndCancellation();
+        TestUpgradeCursorTransitions();
+        TestUpgradeCursorContextAndCapability();
     }
     else {
         World world; _MOUSEEVENT click;
@@ -541,6 +692,7 @@ def main():
     source = (DDRAW / "MexUpgrade.cpp").read_text()
     constants = "\n".join(re.findall(r'^\s*constexpr (?:unsigned|int) k(?:DefinitionEnabled|MaxOrders|MaxUpgradeFootprint)\s*=.*?;', source, re.M))
     table = extract(source, "constexpr UpgradePair kUpgrades[]") + ";"
+    table += "\n\n" + extract(source,"struct UpgradeCursor") + ";"
     signatures = (
         "bool LiveOwned(", "UnitStruct* SingleSelectedUnit(", "const char* ReplacementName(",
         "int FindReplacement(", "bool UnderBuildLimit(", "bool ReplacementTile(",
@@ -548,7 +700,7 @@ def main():
         "bool FindUpgradeTarget(", "bool PrepareUpgrade(",
         "UnitOrdersStruct* FindReclaim(", "bool IsBuildAt(", "bool IsReplacementBuild(",
         "bool CancelUpgrade(", "bool QueueUpgrade(", "bool MexUpgrade::Enabled()",
-        "bool MexUpgrade::IsQueuedBuild(", "bool MexUpgrade::TryCommand(",
+        "bool MexUpgrade::IsQueuedBuild(", "bool MexUpgrade::TryCommand(", "void MexUpgrade::UpdateCursor(",
     )
     methods = "\n\n".join(extract(source, signature) for signature in signatures)
     bridge = "reinterpret_cast<int (__cdecl*)()>(0x0047C780u)"

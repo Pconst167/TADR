@@ -43,9 +43,9 @@ namespace
         GAFFrame frame = {};
         GAFSequence sequence = {};
 
-        UpgradeCursor()
+        explicit UpgradeCursor(bool blocked)
         {
-            static constexpr char art[] =
+            static constexpr char arrow[] =
                 "......#......"
                 ".....#+#....."
                 "....#+++#...."
@@ -60,11 +60,29 @@ namespace
                 "....#+++#...."
                 "....#+++#...."
                 "....#####....";
-            static_assert(sizeof(art) == sizeof(pixels) + 1, "Upgrade cursor dimensions");
+            static constexpr char cross[] =
+                "##.........##"
+                "#++#.....#++#"
+                ".#++#...#++#."
+                "..#++#.#++#.."
+                "...#+++++#..."
+                "....#+++#...."
+                ".....#+#....."
+                "....#+++#...."
+                "...#+++++#..."
+                "..#++#.#++#.."
+                ".#++#...#++#."
+                "#++#.....#++#"
+                "##.........##"
+                ".............";
+            static_assert(sizeof(arrow) == sizeof(pixels) + 1, "Upgrade arrow dimensions");
+            static_assert(sizeof(cross) == sizeof(pixels) + 1, "Blocked upgrade cursor dimensions");
+            const char* art = blocked ? cross : arrow;
             for (size_t i = 0; i < sizeof(pixels); ++i)
-                pixels[i] = art[i] == '+' ? 232 : art[i] == '#' ? 142 : 9;
-            // The tip is the click hotspot. Index 9 is TA cursor transparency.
-            frame = {13, 14, 6, 0, 9, 0, 0, 0, pixels, 0};
+                // Use the same red/green palette ramps as TA's stock cursors.
+                pixels[i] = art[i] == '+' ? (blocked ? 211 : 232) : art[i] == '#' ? 142 : 9;
+            // Use the arrow tip or the X center as the hotspot. Index 9 is transparent.
+            frame = {13, 14, 6, static_cast<unsigned short>(blocked ? 6 : 0), 9, 0, 0, 0, pixels, 0};
             sequence.Frames = 1;
             sequence.Signature = 1;
             sequence.PtrFrameAry[0] = {&frame, 10};
@@ -472,7 +490,7 @@ bool MexUpgrade::Enabled()
     if (!MyConfig) return false;
     static const bool enabled = [] {
         const bool active = MyConfig->GetIniBool("MexUpgrade", TRUE) != FALSE;
-        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] build=escalation-offset-v7");
+        if (active) IDDrawSurface::OutptTxt("[MexUpgrade] build=escalation-cursors-v8");
         return active;
     }();
     return enabled;
@@ -493,13 +511,15 @@ void MexUpgrade::UpdateCursor(TAdynmemStruct* ta)
     if (index >= sizeof(ta->cursor_ary) / sizeof(ta->cursor_ary[0])) return;
     auto* stock = ta->cursor_ary[index];
     auto* displayed = reinterpret_cast<GAFSequence*>(ta->desktopGUI.Cursor_3);
-    static UpgradeCursor icon;
+    static UpgradeCursor available(false), blocked(true);
     // Respect custom cursors owned by other patches, such as wreck snapping.
-    if (!stock || (displayed != stock && displayed != &icon.sequence)) return;
+    if (!stock || (displayed != stock && displayed != &available.sequence && displayed != &blocked.sequence)) return;
     Upgrade upgrade = {};
-    const bool ready = !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000)
-        && FindUpgradeTarget(ta, upgrade) && PrepareUpgrade(*ta, upgrade, false);
-    auto* desired = ready ? &icon.sequence : stock;
+    auto* desired = stock;
+    if (!(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000)
+        && FindUpgradeTarget(ta, upgrade)
+        && FindReplacement(*ta, *upgrade.target->UnitType, *upgrade.constructor->UnitType, upgrade.replacement))
+        desired = PrepareUpgrade(*ta, upgrade, false) ? &available.sequence : &blocked.sequence;
     if (displayed != desired) SetUICursor(&ta->desktopGUI, desired);
 }
 
