@@ -20,6 +20,7 @@
 #include "CameraBounds.h"
 #include "SmallMapViewport.h"
 #include "MexUpgrade.h"
+#include "MainMapRadar.h"
 
 #include "ddraw.h"
 #include "Profiler.h"
@@ -121,6 +122,7 @@ namespace
         if (HasSmallMap(ta))
             SmallMapViewport::ClearMargins(PixelSurface(surface), WorldView(ta),
                 ta->EyeBallMapXPos, ta->EyeBallMapYPos, ta->MapSizeX, ta->MapSizeY);
+        MainMapRadar::Draw(*TAmainStruct_PtrPtr, surface);
         reinterpret_cast<void (__stdcall*)(OFFSCREEN*)>(0x004689C0u)(surface);
     }
 
@@ -2695,6 +2697,9 @@ TABugFixing::TABugFixing ()
             }
         }
     }
+
+    if (MainMapRadar::Enabled())
+        IDDrawSurface::OutptFmtTxt("[MainMapRadar] post-fog hook=%d", SmallMapHooksInstalled);
 
     if (MexUpgrade::Enabled())
     {

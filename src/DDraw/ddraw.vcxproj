@@ -523,6 +523,7 @@ if NOT "$(LocalDebuggerWorkingDirectory)" == "$(ProjectDir)" if exist "$(LocalDe
     <ClCompile Include="TAConfig.cpp" />
     <ClCompile Include="DrawnMove.cpp" />
     <ClCompile Include="MexUpgrade.cpp" />
+    <ClCompile Include="MainMapRadar.cpp" />
     <ClCompile Include="tahook.cpp">
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -618,6 +619,7 @@ if NOT "$(LocalDebuggerWorkingDirectory)" == "$(ProjectDir)" if exist "$(LocalDe
     <ClInclude Include="tafunctions.h" />
     <ClInclude Include="DrawnMove.h" />
     <ClInclude Include="MexUpgrade.h" />
+    <ClInclude Include="MainMapRadar.h" />
     <ClInclude Include="DrawnMoveGeometry.h" />
     <ClInclude Include="tahook.h" />
     <ClInclude Include="BuildRectangleGeometry.h" />

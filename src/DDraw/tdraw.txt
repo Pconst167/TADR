@@ -247,6 +247,7 @@ NEW FEATURES IN BRIEF:
 - Building rotation: press '/' (configurable) to cycle the build cursor
   facing for buildings whose FBI permits it (see NEW FEATURES IN DETAIL)
 - One-click metal extractor upgrades (Escalation)
+- Radar contacts on the normal battlefield (see NEW FEATURES IN DETAIL)
 
   Select a constructor and click one of your completed metal extractors to
   reclaim it and build the next tier at the same site. The constructor must
@@ -373,6 +374,18 @@ NEW FEATURES IN BRIEF:
 - Change ctrl+s to use CTRL_W and NOTAIR/NAIR categories so as not to select jammers etc
 
 NEW FEATURES IN DETAIL:
+
+- Radar contacts on the normal battlefield
+
+  MainMapRadarContacts=TRUE under [Preferences] shows generic, player-colored
+  radar and sonar contacts over the normal map's fog of war. Enabled by default;
+  set it to FALSE and restart TA to disable it.
+
+  Markers follow the same current sensor contacts as the minimap, including
+  shared sensors, enemy jamming and the viewed player's perspective in replays.
+  Units in visual line of sight use their normal models. Radar-only contacts
+  do not reveal unit types. The megamap keeps its existing icons.
+
 
 - Enhanced allied resource bars and replay totals
 
