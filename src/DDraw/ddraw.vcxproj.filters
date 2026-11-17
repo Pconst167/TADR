@@ -141,10 +141,6 @@
     </ClCompile>
     <ClCompile Include="DrawnMove.cpp" />
     <ClCompile Include="MexUpgrade.cpp" />
-    <ClCompile Include="MultiBuild.cpp" />
-    <ClCompile Include="MultiBuildAssets.cpp" />
-    <ClCompile Include="MultiBuildOrders.cpp" />
-    <ClCompile Include="MultiBuildMenu.cpp" />
     <ClCompile Include="AlliedCursors.cpp" />
     <ClCompile Include="AlliedCursorDraw.cpp" />
     <ClCompile Include="tahook.cpp">
@@ -535,12 +531,6 @@
     </ClInclude>
     <ClInclude Include="DrawnMove.h" />
     <ClInclude Include="MexUpgrade.h" />
-    <ClInclude Include="MultiBuild.h" />
-    <ClInclude Include="MultiBuildAssets.h" />
-    <ClInclude Include="MultiBuildOrders.h" />
-    <ClInclude Include="MultiBuildMenu.h" />
-    <ClInclude Include="MultiBuildData.h" />
-    <ClInclude Include="MultiBuildMenuGeometry.h" />
     <ClInclude Include="AlliedCursors.h" />
     <ClInclude Include="AlliedCursorDraw.h" />
     <ClInclude Include="AlliedCursorProtocol.h" />

@@ -13,7 +13,6 @@
 #include "ShareUnitSettings.h"
 #include "Profiler.h"
 #include "config.h"
-#include "MultiBuild.h"
 
 #include <cctype>
 #include <cstddef>
@@ -876,15 +875,6 @@ static int __stdcall TestBuildSpot_Entry_Proc(PInlineX86StackBuffer)
     return 0;
 }
 
-#if MULTI_BUILD_ENABLE
-// The native entry is stdcall with one argument. Return before its prologue
-// when the shared placement controller has issued a cooperative group task.
-__declspec(naked) static void MultiBuildIssueReturn()
-{
-    __asm ret 4
-}
-#endif
-
 // GUI_IssueMobileBuildOrder entry — capture rotation, install return trampoline.
 static int __stdcall IssueMobileBuild_Entry_Proc(PInlineX86StackBuffer X86StrackBuffer)
 {
@@ -894,13 +884,6 @@ static int __stdcall IssueMobileBuild_Entry_Proc(PInlineX86StackBuffer X86Strack
     // Save caller's real return address (top of stack at hook entry, before
     // the function's own prologue has run).
     DWORD* stackTop = reinterpret_cast<DWORD*>(X86StrackBuffer->Esp);
-#if MULTI_BUILD_ENABLE
-    if (MultiBuild::TryIssue(GetTA(), reinterpret_cast<const MOUSEEVENT*>(stackTop[1])))
-    {
-        X86StrackBuffer->rtnAddr_Pvoid = reinterpret_cast<void*>(&MultiBuildIssueReturn);
-        return X86STRACKBUFFERCHANGE;
-    }
-#endif
     g_issueRealReturn = *stackTop;
     *stackTop = reinterpret_cast<DWORD>(&IssueReturnThunk);
 

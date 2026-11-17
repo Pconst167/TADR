@@ -46,7 +46,6 @@ using namespace std;
 #include "PacketChatRouter.h"
 #include "AlliedBuildQueueSync.h"
 #include "AlliedCursors.h"
-#include "MultiBuild.h"
 #include "VoteReject.h"
 #include "ShareGuard.h"
 #include "ShareUnitSettings.h"
@@ -251,9 +250,6 @@ bool APIENTRY DllMain(HINSTANCE hinst, unsigned long reason, void*)
 			INLINE_5BYTESLAGGERJMP, AddtionInitAfterDDraw);
 
 		PacketChatRouter::GetInstance();
-#if MULTI_BUILD_ENABLE
-        MultiBuild::Install();
-#endif
 #if ALLIED_CURSORS_ENABLE
         AlliedCursors::Install();
 #endif
