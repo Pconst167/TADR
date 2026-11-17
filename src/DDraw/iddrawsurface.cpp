@@ -29,6 +29,7 @@ using namespace std;
 #include "DrawnMove.h"
 #include "AlliedCursors.h"
 #include "AlliedCursorDraw.h"
+#include "MultiBuildMenu.h"
 #include "commanderwarp.h"
 #include "maprect.h"
 
@@ -754,7 +755,7 @@ HRESULT __stdcall IDDrawSurface::Unlock(LPVOID arg1)
 
 #endif
 
-#if ALLIED_CURSORS_ENABLE
+#if ALLIED_CURSORS_ENABLE || MULTI_BUILD_ENABLE
             {
                 // The megamap replaces the game-area pixels in Blit above.
                 // Draw onto its final surface, before dialogs and the local pointer.
@@ -770,8 +771,16 @@ HRESULT __stdcall IDDrawSurface::Unlock(LPVOID arg1)
                         ta = *TAmainStruct_PtrPtr;
                         if (surface.ddpfPixelFormat.dwRGBBitCount == 8 && ta && DataShare
                             && DataShare->TAProgress == TAInGame)
+                        {
+#if ALLIED_CURSORS_ENABLE
                             AlliedCursorDraw::Draw(static_cast<char*>(surface.lpSurface), surface.dwWidth,
                                 surface.dwHeight, surface.lPitch, *ta, AlliedCursors::Snapshot(ta));
+#endif
+#if MULTI_BUILD_ENABLE
+                            MultiBuildMenu::Draw(static_cast<char*>(surface.lpSurface), surface.dwWidth,
+                                surface.dwHeight, surface.lPitch, ta);
+#endif
+                        }
                         lpBack->Unlock(NULL);
                     }
                 }
@@ -929,7 +938,7 @@ HRESULT __stdcall IDDrawSurface::Unlock(LPVOID arg1)
 			}
 #endif
 
-#if ALLIED_CURSORS_ENABLE
+#if ALLIED_CURSORS_ENABLE || MULTI_BUILD_ENABLE
             {
                 // The megamap replaces the game-area pixels in Blit above.
                 // Draw onto its final surface, before dialogs and the local pointer.
@@ -945,8 +954,16 @@ HRESULT __stdcall IDDrawSurface::Unlock(LPVOID arg1)
                         ta = *TAmainStruct_PtrPtr;
                         if (surface.ddpfPixelFormat.dwRGBBitCount == 8 && ta && DataShare
                             && DataShare->TAProgress == TAInGame)
+                        {
+#if ALLIED_CURSORS_ENABLE
                             AlliedCursorDraw::Draw(static_cast<char*>(surface.lpSurface), surface.dwWidth,
                                 surface.dwHeight, surface.lPitch, *ta, AlliedCursors::Snapshot(ta));
+#endif
+#if MULTI_BUILD_ENABLE
+                            MultiBuildMenu::Draw(static_cast<char*>(surface.lpSurface), surface.dwWidth,
+                                surface.dwHeight, surface.lPitch, ta);
+#endif
+                        }
                         lpBack->Unlock(NULL);
                     }
                 }
@@ -1365,6 +1382,10 @@ LRESULT CALLBACK _WinProc(HWND WinProcWnd, UINT Msg, WPARAM wParam, LPARAM lPara
 		{
 			return LocalShare->TAWndProc ( WinProcWnd, Msg, wParam, lParam);
 		}
+
+#if MULTI_BUILD_ENABLE
+        if (MultiBuildMenu::Message(WinProcWnd, Msg, wParam, lParam)) return 0;
+#endif
 
 		//////////////////////////////////////////////////////////////////////////
 		if (NULL!=NowCrackLimit)

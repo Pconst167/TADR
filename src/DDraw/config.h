@@ -41,6 +41,18 @@
 
 #include "OptionalUnitControls.h"
 
+// Combined construction menus and cooperative placement.
+#ifndef MULTI_BUILD_ENABLE
+#if defined(TDRAW_CONFIG_ESCALATION)
+#define MULTI_BUILD_ENABLE 1
+#else
+#define MULTI_BUILD_ENABLE 0
+#endif
+#endif
+#if MULTI_BUILD_ENABLE != 0 && MULTI_BUILD_ENABLE != 1
+#error "MULTI_BUILD_ENABLE must be 0 or 1"
+#endif
+
 // Teammate cursors are always shown in builds that include this HUD feature.
 #ifndef ALLIED_CURSORS_ENABLE
 #if defined(TDRAW_CONFIG_ESCALATION)

@@ -1,0 +1,63 @@
+name: Test combined construction
+on:
+  push:
+    branches: ['feature/multi-construction-test']
+permissions:
+  contents: read
+jobs:
+  behavior:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Menus, assets, selection, orders and existing controls
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/multi_build_data_test.cpp -o /tmp/multi-build-data
+          /tmp/multi-build-data
+          g++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/multi_build_menu_geometry_test.cpp -o /tmp/multi-build-menu
+          /tmp/multi-build-menu
+          python3 src/DDraw/test/multi_build_assets_io_test.py
+          python3 src/DDraw/test/multi_build_model_test.py
+          python3 src/DDraw/test/multi_build_orders_test.py
+          python3 src/DDraw/test/multi_build_menu_test.py
+          python3 src/DDraw/test/optional_unit_controls_test.py
+          python3 src/DDraw/test/mex_upgrade_test.py
+          python3 src/DDraw/test/mex_upgrade_menu_io_test.py
+          python3 src/DDraw/test/allied_cursor_controller_test.py
+          python3 src/DDraw/test/allied_cursor_draw_test.py
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: escalation, mod: ESCALATION, base: false, multi: 1, cursors: 1}
+          - {name: escalation-base-controls, mod: ESCALATION, base: true, multi: 1, cursors: 0}
+          - {name: prota, mod: PROTA, base: false, multi: 0, cursors: 0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_x86
+      - name: Build combined test DLL
+        shell: pwsh
+        run: |
+          $buildArgs = @('src/DDraw/ddraw.vcxproj', '/p:Configuration=ReleasePublic', '/p:Platform=Win32', '/p:TDRAW_CONFIG=TDRAW_CONFIG_${{ matrix.mod }}')
+          if ('${{ matrix.base }}' -eq 'true') {
+            $env:CL = '/DALLIED_CURSORS_ENABLE=0'
+            $buildArgs += @('/p:DRAWN_MOVE_FORMATIONS_ENABLE=0', '/p:MEX_UPGRADE_ENABLE=0', '/p:GRID_BUILDING_ENABLE=0')
+          }
+          & msbuild @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Verify expected features
+        run: |
+          python src/DDraw/test/verify_multi_build.py src/DDraw/Public/tdraw.dll --enabled ${{ matrix.multi }}
+          python src/DDraw/test/verify_allied_cursors.py src/DDraw/Public/tdraw.dll --enabled ${{ matrix.cursors }}
+      - name: Verify Windows 7 imports
+        run: python src/DDraw/tools/check_win7_imports.py src/DDraw/Public/tdraw.dll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multi-construction-${{ matrix.name }}
+          path: |
+            src/DDraw/Public/tdraw.dll
+            src/DDraw/Public/tdraw.map
+            src/DDraw/Public/tdraw.pdb
