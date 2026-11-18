@@ -17,6 +17,8 @@ jobs:
           /tmp/allied-cursor-geometry
           python3 src/DDraw/test/allied_cursor_draw_test.py
           python3 src/DDraw/test/allied_cursor_controller_test.py
+          python3 src/DDraw/test/build_rectangle_gesture_test.py
+          python3 src/DDraw/test/build_rectangle_input_test.py
           python3 src/DDraw/test/optional_unit_controls_test.py
           python3 src/DDraw/test/mex_upgrade_test.py
           python3 src/DDraw/test/mex_upgrade_menu_io_test.py
