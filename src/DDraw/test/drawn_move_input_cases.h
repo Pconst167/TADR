@@ -54,6 +54,60 @@ void TestGestureLogLimit() {
     // Later gestures must not resume per-gesture logging.
 }
 
+// Either member of Ctrl+Shift may arrive first during an Alt gesture. Queue
+// insertion is selected by the outer command batch at mouse release.
+void TestQueueInsertModifier() {
+    for (int interface : {0,1}) for (bool mega : {false,true})
+        for (bool queue : {false,true}) for (bool system : {false,true})
+        for (bool controlFirst : {false,true}) {
+#if !USEMEGAMAP
+        if (mega) continue;
+#endif
+        const UINT down=interface==0 ? WM_LBUTTONDOWN : WM_RBUTTONDOWN;
+        const UINT up=interface==0 ? WM_LBUTTONUP : WM_RBUTTONUP;
+        const UINT keyDown=system ? WM_SYSKEYDOWN : WM_KEYDOWN;
+        const UINT keyUp=system ? WM_SYSKEYUP : WM_KEYUP;
+        const UINT first=controlFirst ? VK_CONTROL : VK_SHIFT;
+        const UINT second=controlFirst ? VK_SHIFT : VK_CONTROL;
+        const unsigned keys=queue ? MK_SHIFT : 0;
+        reset(interface);megaController.visible=mega;
+        assert(event(down,300,200,keys,true,mega));
+        event(WM_MOUSEMOVE,400,200,keys);
+        assert(!event(keyDown,400,200,first));
+        assert(!event(keyDown,400,200,second));
+        assert(DrawnMove::OwnsInput());
+        assert(!event(keyUp,400,200,first));
+        assert(!event(keyUp,400,200,second));
+        // Repeat and keep the chord held until commit. Both members must be
+        // allowed independently, even before the other key is pressed.
+        assert(!event(keyDown,400,200,first));
+        assert(!event(keyDown,400,200,second));
+        assert(!event(keyDown,400,200,second));
+        event(WM_MOUSEMOVE,500,200,keys);
+        assert(event(up,500,200,keys));
+#if PREPEND_ORDERS_ENABLE
+        assert(orders.size()==(diagnosticNoOrders ? 0 : 3));
+        for (const auto& order : orders) assert(order.shift==queue);
+#else
+        assert(orders.empty()); // Ctrl still cancels when prepend is omitted.
+#endif
+        assert(!DrawnMove::OwnsInput() && capture==0);
+        assert(!event(up,500,200,keys));
+        selected();
+        // Space retains its baseline cancellation behavior; the module must
+        // not swallow it or reserve it from TA's scoreboard/information UI.
+        for (unsigned other : {VK_SPACE, unsigned('A')}) {
+            reset(interface);megaController.visible=mega;
+            assert(event(down,300,200,keys,true,mega));
+            assert(!event(keyDown,400,200,other));
+            event(WM_MOUSEMOVE,500,200,keys);
+            assert(event(up,500,200,keys));
+            assert(orders.empty() && !DrawnMove::OwnsInput() && capture==0);
+            selected();
+        }
+    }
+}
+
 void TestRapidDoubleClickGestures() {
     for (int interface : {0,1}) for (bool mega : {false,true}) for (bool queue : {false,true}) {
 #if !USEMEGAMAP
@@ -133,7 +187,7 @@ int main() {
         DrawnMove::LogBuild();
         for (unsigned keys : {0u,MK_SHIFT,MK_CONTROL,MK_SHIFT|MK_CONTROL})
             for (UINT message : {WM_LBUTTONDOWN,WM_LBUTTONDBLCLK,WM_MOUSEMOVE,WM_LBUTTONUP,WM_RBUTTONDOWN,WM_RBUTTONDBLCLK,
-                WM_RBUTTONUP,WM_MOUSEWHEEL,WM_KEYDOWN,WM_SYSKEYDOWN,WM_KILLFOCUS,
+                WM_RBUTTONUP,WM_MOUSEWHEEL,WM_KEYDOWN,WM_SYSKEYDOWN,WM_KEYUP,WM_SYSKEYUP,WM_KILLFOCUS,
                 WM_CANCELMODE,WM_CAPTURECHANGED,WM_ACTIVATEAPP})
                 for (bool start : {false,true})
                     assert(!event(message,300,200,keys,start,mega));
@@ -153,6 +207,7 @@ int main() {
 #else
     TestGestureLogLimit();
     TestRapidDoubleClickGestures();
+    TestQueueInsertModifier();
 #if defined(_DEBUG) && DRAWN_MOVE_TEST_NO_ORDERS
     reset();assert(event(WM_RBUTTONDOWN));event(WM_MOUSEMOVE,500,300);event(WM_RBUTTONUP,500,300);
     assert(orders.empty());selected();assert(!DrawnMove::OwnsInput());

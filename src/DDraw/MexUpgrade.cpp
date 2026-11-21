@@ -1,5 +1,8 @@
 #include "config.h"
 #include "MexUpgrade.h"
+#if PREPEND_ORDERS_ENABLE
+#include "PrependOrders.h"
+#endif
 
 #if MEX_UPGRADE_ENABLE
 #include "MexUpgradeMenu.h"
@@ -429,6 +432,18 @@ namespace
         return true;
     }
 
+    bool UpgradeControlHeld(unsigned keys = ~0u)
+    {
+        // Cursor previews use the physical keys. A saved command uses only
+        // its own flags, or the enclosing synthetic command's active batch.
+        const bool physical = keys == ~0u;
+#if PREPEND_ORDERS_ENABLE
+        if (physical ? PrependOrders::ModifierDown()
+            : (PrependOrders::Active() || PrependOrders::ModifierForMouse(keys))) return false;
+#endif
+        return physical ? (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 : (keys & MK_CONTROL) != 0;
+    }
+
     unsigned char ActionIndex(const char* name)
     {
         const auto lookup = reinterpret_cast<unsigned char* (__thiscall*)(unsigned char*, const char*)>(0x00438760u);
@@ -439,7 +454,11 @@ namespace
 
     // ORDERS_NewMainOrder2Unit, also used by native GUI_IssueMobileBuildOrder.
     using Dispatch = void (__stdcall*)(unsigned, int, UnitStruct*, UnitStruct*, const Position_Dword*, int, int);
+#if PREPEND_ORDERS_ENABLE
+    const Dispatch Send = &PrependOrders::Dispatch;
+#else
     const auto Send = reinterpret_cast<Dispatch>(0x0043AFC0u);
+#endif
     const auto Remove = reinterpret_cast<void (__stdcall*)(UnitStruct*, UnitOrdersStruct*)>(0x00439F80u);
 
     struct Actions { unsigned reclaim, build; };
@@ -599,7 +618,7 @@ void MexUpgrade::UpdateCursor(TAdynmemStruct* ta)
     if (!stock || (displayed != stock && displayed != &available.sequence && displayed != &blocked.sequence)) return;
     Upgrade upgrade = {};
     auto* desired = stock;
-    if (!(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000)
+    if (!UpgradeControlHeld() && !(GetAsyncKeyState(VK_MENU) & 0x8000)
         && FindUpgradeTarget(ta, upgrade)
         && FindReplacement(*ta, *upgrade.target->UnitType, *upgrade.constructor->UnitType, upgrade.replacement))
         desired = PrepareUpgrade(*ta, upgrade, false) ? &available.sequence : &blocked.sequence;
@@ -666,9 +685,13 @@ bool MexUpgrade::IsQueuedBuild(const TAdynmemStruct* ta, const UnitStruct* const
 
 bool MexUpgrade::TryCommand(TAdynmemStruct* ta, const _MOUSEEVENT* mouse)
 {
-    if (!Enabled() || !ta || !mouse || (mouse->fwKeys & MK_CONTROL)
+    if (!Enabled() || !ta || !mouse || UpgradeControlHeld(mouse->fwKeys)
         || (GetAsyncKeyState(VK_MENU) & 0x8000)) return false;
-    const bool shift = (mouse->fwKeys & MK_SHIFT) != 0;
+    const bool shift = (mouse->fwKeys & MK_SHIFT) != 0
+#if PREPEND_ORDERS_ENABLE
+        && !PrependOrders::Active() && !PrependOrders::ModifierForMouse(mouse->fwKeys)
+#endif
+        ;
     // An eligible extractor takes precedence over additive selection. All
     // other clicks fall through to the stock selection or order handler.
     const bool leftCommand = ta->InterfaceType == 0 && mouse->Msg == WM_LBUTTONUP && !(mouse->fwKeys & MK_RBUTTON);

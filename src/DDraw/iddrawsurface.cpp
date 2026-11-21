@@ -27,6 +27,7 @@ using namespace std;
 #include "VoteDialog.h"
 #include "tahook.h"
 #include "DrawnMove.h"
+#include "PrependOrders.h"
 #include "AlliedCursors.h"
 #include "AlliedCursorDraw.h"
 #include "commanderwarp.h"
@@ -1407,6 +1408,8 @@ LRESULT CALLBACK _WinProc(HWND WinProcWnd, UINT Msg, WPARAM wParam, LPARAM lPara
 			&&(((AlliesWhiteboard*)LocalShare->Whiteboard)->Message(WinProcWnd, Msg, wParam, lParam)))
 			return 0;
 
+        if (PrependOrders::KeyMessage(Msg, wParam)) return 0;
+
 		if((NULL!=LocalShare->Income)
 			&&(((CIncome*)LocalShare->Income)->Message(WinProcWnd, Msg, wParam, lParam)))
 			return 0;  //message handled by the income class
@@ -1461,5 +1464,6 @@ LRESULT CALLBACK WinProc(HWND WinProcWnd, UINT Msg, WPARAM wParam, LPARAM lParam
 #ifdef SYNCHRONISE_THREADS
     std::lock_guard<std::recursive_mutex> lock(WinProcMutex);
 #endif
+    PrependOrders::Batch prependBatch(PrependOrders::CommandMessage(Msg) && PrependOrders::ModifierDown());
     return _WinProc(WinProcWnd, Msg, wParam, lParam);
 }

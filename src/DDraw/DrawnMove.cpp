@@ -1,6 +1,9 @@
 #include "config.h"
 #include "oddraw.h"
 #include "DrawnMove.h"
+#if PREPEND_ORDERS_ENABLE
+#include "PrependOrders.h"
+#endif
 
 #ifndef DRAWN_MOVE_FORMATIONS_ENABLE
 #error "DrawnMove requires config.h to define DRAWN_MOVE_FORMATIONS_ENABLE"
@@ -312,7 +315,11 @@ namespace DrawnMove
             if (message == WM_KILLFOCUS || message == WM_CANCELMODE || message == WM_CAPTURECHANGED
                 || (message == WM_ACTIVATEAPP && !keys)
                 || ((message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
-                    && keys != VK_SHIFT && keys != VK_MENU)
+                    && keys != VK_SHIFT && keys != VK_MENU
+#if PREPEND_ORDERS_ENABLE
+                    && !PrependOrders::ModifierKey(static_cast<UINT>(keys))
+#endif
+                    )
                 || message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MOUSEWHEEL)
                 Cancel();
             if (!g.cancelled && !ValidGesture(ta)) Cancel();

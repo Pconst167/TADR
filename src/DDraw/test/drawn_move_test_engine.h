@@ -25,8 +25,11 @@ using BOOL=int;
 constexpr UINT WM_LBUTTONDOWN=1, WM_LBUTTONUP=2, WM_RBUTTONDOWN=3, WM_RBUTTONUP=4,
     WM_MOUSEMOVE=5, WM_KILLFOCUS=6, WM_CANCELMODE=7, WM_CAPTURECHANGED=8,
     WM_ACTIVATEAPP=9, WM_KEYDOWN=10, WM_MOUSEWHEEL=11, WM_SYSKEYDOWN=12,
-    WM_LBUTTONDBLCLK=13, WM_RBUTTONDBLCLK=14;
-constexpr unsigned MK_SHIFT=4, MK_CONTROL=8, VK_SHIFT=16, VK_MENU=18;
+    WM_LBUTTONDBLCLK=13, WM_RBUTTONDBLCLK=14, WM_KEYUP=15, WM_SYSKEYUP=16;
+constexpr unsigned MK_SHIFT=4, MK_CONTROL=8, VK_SHIFT=16, VK_CONTROL=17, VK_MENU=18, VK_SPACE=32;
+#if PREPEND_ORDERS_ENABLE
+namespace PrependOrders { bool ModifierKey(UINT key) { return key == VK_CONTROL || key == VK_SHIFT; } }
+#endif
 constexpr int TAInGame=6, Player_LocalHuman=1, WATCH=0x40, UnitSelected_State=0x10,
     canmove=1, cursormove=14, cursornormal=19;
 namespace ordertype { enum { STOP=1, MOVE=2, ATTACK=3 }; }

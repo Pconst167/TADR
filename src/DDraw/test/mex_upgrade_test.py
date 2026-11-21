@@ -1046,6 +1046,7 @@ def main():
     table = extract(source, "constexpr UpgradePair kUpgrades[]") + ";"
     table += "\n\n" + extract(source,"struct UpgradeCursor") + ";"
     signatures = (
+        "bool UpgradeControlHeld(",
         "bool LiveOwned(", "UnitStruct* SingleSelectedUnit(", "const char* ReplacementName(",
         "int FindReplacement(", "bool UnderBuildLimit(", "bool ReplacementTile(",
         "bool ReplacementContainsTarget(", "bool CheckReplacementTile(", "bool CheckReplacementSite(",
@@ -1084,7 +1085,7 @@ def main():
                 subprocess.run(shlex.split(os.environ.get("CXX", "g++")) + [
                     "-std=c++11", "-Wall", "-Wextra", "-Werror", "-g",
                     "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
-                    "-I", str(DDRAW), "-DTDRAW_CONFIG_" + mod,
+                    "-I", str(DDRAW), "-DTDRAW_CONFIG_" + mod, "-DPREPEND_ORDERS_ENABLE=0",
                 ] + flags + [str(cpp if compiled else disabled), "-o", str(binary)], check=True)
                 for configured in ("1", "0"):
                     subprocess.run([str(binary), configured], check=True, env=env)

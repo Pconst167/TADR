@@ -19,6 +19,7 @@
 #include "IncreaseCompositeSize.h"
 #include "CameraBounds.h"
 #include "SmallMapViewport.h"
+#include "PrependOrders.h"
 #if MEX_UPGRADE_ENABLE
 #include "MexUpgrade.h"
 #endif
@@ -176,6 +177,11 @@ namespace
     // Margin clicks must not turn the clamped height-resolver point into orders.
     void __fastcall DispatchSmallMapCommand(void* context, void*, int* message)
     {
+#if PREPEND_ORDERS_ENABLE
+        const auto* mouse = reinterpret_cast<const MOUSEEVENT*>(message);
+        PrependOrders::Batch prependBatch(mouse && PrependOrders::CommandMessage(mouse->Msg)
+            && PrependOrders::ModifierForMouse(mouse->fwKeys), true);
+#endif
         TAdynmemStruct* ta = *TAmainStruct_PtrPtr;
         if (HasSmallMap(ta) && (ta->BuildSpotState & 3) == 0) return;
 #if MEX_UPGRADE_ENABLE
@@ -184,13 +190,21 @@ namespace
         reinterpret_cast<void (__thiscall*)(void*, int*)>(0x00498F70u)(context, message);
     }
 
-#if MEX_UPGRADE_ENABLE
+#if MEX_UPGRADE_ENABLE || PREPEND_ORDERS_ENABLE
     void __fastcall DispatchRightCommand(void* context, void*, MOUSEEVENT* message)
     {
+#if PREPEND_ORDERS_ENABLE
+        PrependOrders::Batch prependBatch(message && PrependOrders::CommandMessage(message->Msg)
+            && PrependOrders::ModifierForMouse(message->fwKeys), true);
+#endif
+#if MEX_UPGRADE_ENABLE
         if (MexUpgrade::TryCommand(*TAmainStruct_PtrPtr, message)) return;
+#endif
         reinterpret_cast<void (__thiscall*)(void*, MOUSEEVENT*)>(0x00499100u)(context, message);
     }
+#endif
 
+#if MEX_UPGRADE_ENABLE
     void __cdecl DispatchUpgradeCursor()
     {
         // Run the native input update first. Its cursor index still controls
@@ -219,10 +233,12 @@ namespace
         {0x00498EF9u, {0xE8,0x52,0xBC,0xFE,0xFF}, reinterpret_cast<void*>(&ProjectSmallMapPointer)},
         {0x004995B3u, {0xE8,0xB8,0xF9,0xFF,0xFF}, reinterpret_cast<void*>(&DispatchSmallMapCommand)}
     };
-#if MEX_UPGRADE_ENABLE
+#if MEX_UPGRADE_ENABLE || PREPEND_ORDERS_ENABLE
     SmallMapCall MexUpgradeRightClick = {
         0x004993ACu, {0xE8,0x4F,0xFD,0xFF,0xFF}, reinterpret_cast<void*>(&DispatchRightCommand)
     };
+#endif
+#if MEX_UPGRADE_ENABLE
     // SuppressShowReclaimCursorProc in tahook.cpp redirects wreck-snap handling
     // here too. Keep the CALL boundary at 0x004992CD intact so that path also
     // runs DispatchUpgradeCursor.
@@ -2709,8 +2725,14 @@ TABugFixing::TABugFixing ()
         }
     }
 
-#if MEX_UPGRADE_ENABLE
-    if (MexUpgrade::Enabled())
+#if MEX_UPGRADE_ENABLE || PREPEND_ORDERS_ENABLE
+    const bool needRightCommand =
+#if PREPEND_ORDERS_ENABLE
+        true;
+#else
+        MexUpgrade::Enabled();
+#endif
+    if (needRightCommand)
     {
         const auto installCall = [this](SmallMapCall& site) {
             const auto* address = reinterpret_cast<const void*>(site.address);
@@ -2727,9 +2749,17 @@ TABugFixing::TABugFixing ()
             return false;
         };
         const bool right = installCall(MexUpgradeRightClick);
-        const bool cursor = right && SmallMapHooksInstalled && installCall(MexUpgradeCursor);
-        IDDrawSurface::OutptFmtTxt("[MexUpgrade] hooks left=%d right=%d cursor=%d",
-            SmallMapHooksInstalled, right, cursor);
+#if MEX_UPGRADE_ENABLE
+        if (MexUpgrade::Enabled())
+        {
+            const bool cursor = right && SmallMapHooksInstalled && installCall(MexUpgradeCursor);
+            IDDrawSurface::OutptFmtTxt("[MexUpgrade] hooks left=%d right=%d cursor=%d",
+                SmallMapHooksInstalled, right, cursor);
+        }
+#endif
+#if PREPEND_ORDERS_ENABLE
+        IDDrawSurface::OutptFmtTxt("[QueuePrepend] input hooks left=%d right=%d", SmallMapHooksInstalled, right);
+#endif
     }
 
 #endif

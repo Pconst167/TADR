@@ -527,6 +527,7 @@ if NOT "$(LocalDebuggerWorkingDirectory)" == "$(ProjectDir)" if exist "$(LocalDe
     <ClCompile Include="TABugFix.cpp" />
     <ClCompile Include="TAConfig.cpp" />
     <ClCompile Include="DrawnMove.cpp" />
+    <ClCompile Include="PrependOrders.cpp" />
     <ClCompile Include="MexUpgrade.cpp" />
     <ClCompile Include="AlliedCursors.cpp" />
     <ClCompile Include="AlliedCursorDraw.cpp" />

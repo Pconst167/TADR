@@ -40,6 +40,12 @@
 #endif
 
 #include "OptionalUnitControls.h"
+#ifndef PREPEND_ORDERS_ENABLE
+#error "Each mod config must define PREPEND_ORDERS_ENABLE"
+#elif PREPEND_ORDERS_ENABLE != 0 && PREPEND_ORDERS_ENABLE != 1
+#error "PREPEND_ORDERS_ENABLE must be 0 or 1"
+#endif
+
 
 // Teammate cursors are always shown in builds that include this HUD feature.
 #ifndef ALLIED_CURSORS_ENABLE

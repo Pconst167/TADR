@@ -16,6 +16,9 @@
 #include "hook\hook.h"
 #include "tahook.h"
 #include "DrawnMove.h"
+#if PREPEND_ORDERS_ENABLE
+#include "PrependOrders.h"
+#endif
 #include "TAConfig.h"
 #include "unitrotate.h"
 #include "buildghost.h"
@@ -875,6 +878,9 @@ bool CTAHook::Message(HWND WinProcWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 						}
 						else if ((ordertype::STOP == TAdynmem->PrepareOrder_Type) && 
 							(GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+#if PREPEND_ORDERS_ENABLE
+							!PrependOrders::ModifierDown() &&
+#endif
 #if USEMEGAMAP
 							!GUIExpander->myMinimap->Controler->IsBliting() &&
 #endif
@@ -931,6 +937,9 @@ bool CTAHook::Message(HWND WinProcWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 				if (DraggingUnitOrders &&
 					ordertype::STOP == TAdynmem->PrepareOrder_Type &&
 					GetAsyncKeyState(VK_SHIFT) & 0x8000 &&
+#if PREPEND_ORDERS_ENABLE
+					!PrependOrders::ModifierDown() &&
+#endif
 					DraggingUnitOrders->AttackTargat == NULL &&
 					IsAnOrder(DraggingUnitOrders->Unit_ptr->UnitOrders, DraggingUnitOrders)
 #if USEMEGAMAP
