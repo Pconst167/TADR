@@ -14,6 +14,7 @@
 #endif
 #include <array>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <vector>
@@ -26,7 +27,9 @@ namespace
     struct FeedbackRecord
     {
         Position_Dword origin = {}, destination = {};
+        MoveOrderFeedback::ActorIdentity identity = {};
         unsigned unitIndex = 0, at = 0;
+        unsigned cacheIndex = 0, sequence = 0;
         bool active = false;
     };
     std::mutex feedbackMutex;
@@ -38,7 +41,18 @@ namespace
     UnitStruct* savedOwnFirst = nullptr;
     UnitStruct* savedOwnLast = nullptr;
     int savedPlayer = -1, lastGameTime = -1;
-    unsigned savedDpid = 0, contextSerial = 0;
+    unsigned savedDpid = 0, contextSerial = 0, recordSequence = 0;
+    unsigned diagnosticDraws = 0, diagnosticRejects = 0;
+
+    void LogRecordRejection(unsigned unitIndex, short type, unsigned reason)
+    {
+        __try
+        {
+            IDDrawSurface::OutptFmtTxt("[MoveOrderFeedback] record-rejected unit=%u type=%d reason=%u (1=context 2=position)",
+                unitIndex, static_cast<int>(type), reason);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
 
     void Clear()
     {
@@ -146,6 +160,7 @@ namespace
         POINT from, to;
         Geometry::Rect clip;
         unsigned at;
+        FeedbackRecord actor;
     };
     struct Scene
     {
@@ -153,6 +168,12 @@ namespace
         RECT viewport = {};
         Geometry::Rect clip = {}, excluded = {};
         int cameraX = 0, cameraY = 0, mapWidth = 0, mapHeight = 0;
+        UnitStruct* first = nullptr;
+        UnitStruct* last = nullptr;
+        UnitStruct* ownerFirst = nullptr;
+        UnitStruct* ownerLast = nullptr;
+        int player = -1;
+        unsigned dpid = 0;
         bool megamap = false;
 #if USEMEGAMAP
         MegaMapControl* map = nullptr;
@@ -161,12 +182,39 @@ namespace
         RECT megaClip = {};
 #endif
     };
+    struct PaintStats
+    {
+        const char* stage = "scene-changed";
+        unsigned submitted = 0, liveRejected = 0, expired = 0;
+    };
+    void LogRender(bool enabled, const char* stage, unsigned count, unsigned projected,
+        const Scene& scene, const DDSURFACEDESC& desc, const ScreenRecord& first, const PaintStats& stats)
+    {
+        if (!enabled) return;
+        __try
+        {
+            IDDrawSurface::OutptFmtTxt("[MoveOrderFeedback] render stage=%s records=%u projected=%u submitted=%u live-rejected=%u expired=%u view=%s clip=%d,%d,%d,%d popup=%d,%d,%d,%d first=%ld,%ld->%ld,%ld surface=%lu,%lu pitch=%ld bpp=%lu",
+                stage, count, projected, stats.submitted, stats.liveRejected, stats.expired,
+                scene.megamap ? "mega" : "battle", scene.clip.left, scene.clip.top, scene.clip.right, scene.clip.bottom,
+                scene.excluded.left, scene.excluded.top, scene.excluded.right, scene.excluded.bottom,
+                static_cast<long>(first.from.x), static_cast<long>(first.from.y),
+                static_cast<long>(first.to.x), static_cast<long>(first.to.y),
+                static_cast<unsigned long>(desc.dwWidth), static_cast<unsigned long>(desc.dwHeight),
+                static_cast<long>(desc.lPitch), static_cast<unsigned long>(desc.ddpfPixelFormat.dwRGBBitCount));
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
     bool ReadScene(TAdynmemStruct* ta, Scene& out)
     {
         __try
         {
             if (!Playable(ta)) return false;
             out.world = ta; out.viewport = ta->GameSreen_Rect;
+            out.first = ta->BeginUnitsArray_p; out.last = ta->EndOfUnitsArray_p;
+            out.player = ta->LocalHumanPlayer_PlayerID;
+            out.ownerFirst = ta->Players[out.player].Units;
+            out.ownerLast = ta->Players[out.player].UnitsAry_End;
+            out.dpid = ta->Players[out.player].DirectPlayID;
             out.cameraX = ta->EyeBallMapXPos; out.cameraY = ta->EyeBallMapYPos;
             out.mapWidth = ta->MapSizeX; out.mapHeight = ta->MapSizeY;
             out.clip = SmallMapViewport::MapClip(HalfOpen(out.viewport), out.cameraX, out.cameraY,
@@ -191,23 +239,77 @@ namespace
         }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
+    bool LiveOrigin(const Scene& scene, const FeedbackRecord& record, Position_Dword& origin)
+    {
+        __try
+        {
+            TAdynmemStruct* ta = scene.world;
+            if (World() != ta || !Playable(ta) || ta->LocalHumanPlayer_PlayerID != scene.player
+                || ta->BeginUnitsArray_p != scene.first || ta->EndOfUnitsArray_p != scene.last)
+                return false;
+            const PlayerStruct* owner = &ta->Players[scene.player];
+            if (owner->Units != scene.ownerFirst || owner->UnitsAry_End != scene.ownerLast
+                || owner->DirectPlayID != scene.dpid) return false;
+            const std::uintptr_t first = reinterpret_cast<std::uintptr_t>(scene.first);
+            const std::uintptr_t last = reinterpret_cast<std::uintptr_t>(scene.last);
+            const std::uintptr_t ownFirst = reinterpret_cast<std::uintptr_t>(scene.ownerFirst);
+            const std::uintptr_t ownLast = reinterpret_cast<std::uintptr_t>(scene.ownerLast);
+            if (!first || !last || first > last || !ownFirst || ownFirst > ownLast
+                || record.unitIndex > (last - first) / sizeof(UnitStruct)) return false;
+            const std::uintptr_t address = first + record.unitIndex * sizeof(UnitStruct);
+            if (address < ownFirst || address > ownLast || (address - ownFirst) % sizeof(UnitStruct))
+                return false;
+            // Resolve the actor anew from the current bounded bank. Cached model,
+            // script and definition addresses are opaque identity values only.
+            const UnitStruct* unit = reinterpret_cast<const UnitStruct*>(address);
+            unsigned short birthSalt = 0;
+            std::memcpy(&birthSalt, unit->data9, sizeof(birthSalt));
+            if (!unit->UnitID || unit->UnitID != record.identity.type
+                || static_cast<unsigned short>(unit->UnitInGameIndex) != record.unitIndex
+                || reinterpret_cast<std::uintptr_t>(unit->UnitType) != record.identity.definition
+                || reinterpret_cast<std::uintptr_t>(unit->UnkPTR2) != record.identity.script
+                || reinterpret_cast<std::uintptr_t>(unit->Object3do) != record.identity.model
+                || birthSalt != record.identity.birthSalt || unit->Owner_PlayerPtr0 != owner
+                || !(unit->UnitSelected & 0x10000000u) || (unit->UnitSelected & 0x4000u)
+                || unit->Nanoframe != 0.0f || !unit->UnitType
+                || !(unit->UnitType->UnitTypeMask_0 & canmove) || unit->UnitType->bmcode == 0)
+                return false;
+            origin = Position_Dword{};
+            origin.x_ = unit->XPos__; origin.X = unit->XPos;
+            origin.z_ = unit->ZPos__; origin.Z = unit->ZPos;
+            origin.y_ = unit->YPos__; origin.Y = unit->YPos;
+            if (!InMap(*ta, origin)) return false;
+            if (static_cast<short>(origin.Z) < 0) origin.Z = static_cast<unsigned short>(ta->SeaLevel);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    void Forget(const FeedbackRecord& record, unsigned serial)
+    {
+        std::lock_guard<std::mutex> lock(feedbackMutex);
+        if (serial != contextSerial || record.cacheIndex >= capacity) return;
+        auto& saved = records[record.cacheIndex];
+        if (saved.sequence == record.sequence) saved.active = false;
+    }
     bool Project(const Scene& scene, const FeedbackRecord& record, ScreenRecord& out)
     {
         __try
         {
-            out.at = record.at; out.clip = scene.clip;
+            Position_Dword origin = {};
+            if (!LiveOrigin(scene, record, origin)) return false;
+            out.at = record.at; out.clip = scene.clip; out.actor = record;
 #if USEMEGAMAP
             if (scene.megamap)
             {
                 RECT clip = {};
-                return scene.map->MoveFeedbackScreenPoint(&out.from, &clip, record.origin)
+                return scene.map->MoveFeedbackScreenPoint(&out.from, &clip, origin)
                     && scene.map->MoveFeedbackScreenPoint(&out.to, &clip, record.destination);
             }
 #endif
-            out.from.x = ScreenCoordinate(static_cast<std::int64_t>(record.origin.X)
+            out.from.x = ScreenCoordinate(static_cast<std::int64_t>(origin.X)
                 - scene.cameraX + scene.viewport.left);
-            out.from.y = ScreenCoordinate(static_cast<std::int64_t>(record.origin.Y)
-                - scene.cameraY + scene.viewport.top - record.origin.Z / 2);
+            out.from.y = ScreenCoordinate(static_cast<std::int64_t>(origin.Y)
+                - scene.cameraY + scene.viewport.top - origin.Z / 2);
             out.to.x = ScreenCoordinate(static_cast<std::int64_t>(record.destination.X)
                 - scene.cameraX + scene.viewport.left);
             out.to.y = ScreenCoordinate(static_cast<std::int64_t>(record.destination.Y)
@@ -252,49 +354,75 @@ namespace
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
     void PaintWithUnlock(LPDIRECTDRAWSURFACE surface, const DDSURFACEDESC& desc, const Scene& scene,
-        const std::vector<ScreenRecord>& projected, unsigned serial)
+        const std::vector<ScreenRecord>& projected, unsigned serial, PaintStats& stats)
     {
         __try
         {
-            if (CurrentScene(scene, serial) && desc.ddpfPixelFormat.dwRGBBitCount == 8
-                && desc.dwWidth <= 65536 && desc.dwHeight <= 65536)
+            if (!CurrentScene(scene, serial)) return;
+            stats.stage = "surface-format";
+            if (desc.ddpfPixelFormat.dwRGBBitCount == 8 && desc.dwWidth <= 65536 && desc.dwHeight <= 65536)
             {
+                stats.stage = "painted";
                 const unsigned now = GetTickCount();
                 for (std::size_t i = 0; i < projected.size(); ++i)
                 {
-                    const ScreenRecord& item = projected[i];
-                    if (now - item.at >= lifetime) continue;
+                    ScreenRecord item = {};
+                    if (!Project(scene, projected[i].actor, item))
+                    {
+                        ++stats.liveRejected;
+                        Forget(projected[i].actor, serial);
+                        continue;
+                    }
+                    if (now - item.at >= lifetime) { ++stats.expired; continue; }
                     const Geometry::Surface target = {static_cast<unsigned char*>(desc.lpSurface),
                         static_cast<int>(desc.dwWidth), static_cast<int>(desc.dwHeight), static_cast<int>(desc.lPitch),
                         item.clip, scene.excluded};
+                    if (!Geometry::Valid(target)) { stats.stage = "surface-invalid"; continue; }
                     Geometry::Draw(target, item.from.x, item.from.y, item.to.x, item.to.y, scene.megamap);
+                    ++stats.submitted;
                 }
             }
         }
         __finally { surface->Unlock(nullptr); }
     }
     void PaintProtected(LPDIRECTDRAWSURFACE surface, const DDSURFACEDESC& desc, const Scene& scene,
-        const std::vector<ScreenRecord>& projected, unsigned serial)
+        const std::vector<ScreenRecord>& projected, unsigned serial, PaintStats& stats)
     {
-        __try { PaintWithUnlock(surface, desc, scene, projected, serial); }
-        __except (EXCEPTION_EXECUTE_HANDLER) {}
+        __try { PaintWithUnlock(surface, desc, scene, projected, serial, stats); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { stats.stage = "paint-fault"; }
     }
 }
 
 namespace MoveOrderFeedback
 {
     void Record(TAdynmemStruct* world, unsigned unitIndex,
-        const Position_Dword& origin, const Position_Dword& destination)
+        const ActorIdentity& identity, const Position_Dword& origin, const Position_Dword& destination)
     {
-        std::lock_guard<std::mutex> lock(feedbackMutex);
-        Position_Dword from = {}, to = {};
-        if (!Context(world) || !CapturePositions(world, unitIndex, origin, destination, from, to)) return;
-        // Fixed storage makes capture constant-time and allocation-free even
-        // for a large selection. Oldest feedback is replaced at the hard cap.
-        auto& item = records[nextRecord];
-        nextRecord = (nextRecord + 1) % capacity;
-        item.origin = from; item.destination = to;
-        item.unitIndex = unitIndex; item.at = GetTickCount(); item.active = true;
+        unsigned rejected = 0;
+        bool diagnostic = false;
+        {
+            std::lock_guard<std::mutex> lock(feedbackMutex);
+            Position_Dword from = {}, to = {};
+            if (!Context(world)) rejected = 1;
+            else if (!CapturePositions(world, unitIndex, origin, destination, from, to)) rejected = 2;
+            if (rejected)
+            {
+                diagnostic = diagnosticRejects < 6;
+                if (diagnostic) ++diagnosticRejects;
+            }
+            else
+            {
+                // Fixed storage makes capture constant-time and allocation-free
+                // for a large selection. Oldest feedback is replaced at the cap.
+                auto& item = records[nextRecord];
+                item.cacheIndex = static_cast<unsigned>(nextRecord); item.sequence = ++recordSequence;
+                nextRecord = (nextRecord + 1) % capacity;
+                item.origin = from; item.destination = to;
+                item.identity = identity;
+                item.unitIndex = unitIndex; item.at = GetTickCount(); item.active = true;
+            }
+        }
+        if (diagnostic) LogRecordRejection(unitIndex, identity.type, rejected);
     }
     void Cancel(TAdynmemStruct* world, unsigned unitIndex, const Position_Dword& destination)
     {
@@ -309,6 +437,7 @@ namespace MoveOrderFeedback
         TAdynmemStruct* ta = World();
         std::vector<FeedbackRecord> snapshot;
         unsigned serial = 0;
+        bool diagnostic = false;
         try
         {
             std::lock_guard<std::mutex> lock(feedbackMutex);
@@ -321,6 +450,8 @@ namespace MoveOrderFeedback
                 snapshot.push_back(item);
             }
             serial = contextSerial;
+            diagnostic = !snapshot.empty() && diagnosticDraws < 6;
+            if (diagnostic) ++diagnosticDraws;
         }
         catch (...) { return; }
         if (!surface || snapshot.empty()) return;
@@ -328,7 +459,15 @@ namespace MoveOrderFeedback
         // All native reads and projections are guarded POD helpers. DirectDraw
         // Lock may yield: the epoch/view is validated again before painting.
         Scene scene = {};
-        if (!ReadScene(ta, scene)) return;
+        DDSURFACEDESC desc = {};
+        ScreenRecord first = {};
+        PaintStats stats = {};
+        if (!ReadScene(ta, scene))
+        {
+            LogRender(diagnostic, "scene-unavailable", static_cast<unsigned>(snapshot.size()), 0,
+                scene, desc, first, stats);
+            return;
+        }
         std::vector<ScreenRecord> projected;
         try
         {
@@ -337,22 +476,42 @@ namespace MoveOrderFeedback
             {
                 ScreenRecord out = {};
                 if (Project(scene, item, out)) projected.push_back(out);
+                else Forget(item, serial);
             }
         }
-        catch (...) { return; }
-        if (projected.empty()) return;
-        DDSURFACEDESC desc = {};
+        catch (...)
+        {
+            LogRender(diagnostic, "projection-allocation", static_cast<unsigned>(snapshot.size()), 0,
+                scene, desc, first, stats);
+            return;
+        }
+        if (!projected.empty()) first = projected.front();
+        if (projected.empty())
+        {
+            stats.liveRejected = static_cast<unsigned>(snapshot.size());
+            LogRender(diagnostic, "no-live-projection", static_cast<unsigned>(snapshot.size()), 0,
+                scene, desc, first, stats);
+            return;
+        }
         desc.dwSize = sizeof(desc);
-        if (!LockSurface(surface, desc)) return;
+        if (!LockSurface(surface, desc))
+        {
+            LogRender(diagnostic, "lock-failed", static_cast<unsigned>(snapshot.size()),
+                static_cast<unsigned>(projected.size()), scene, desc, first, stats);
+            return;
+        }
         // Separate POD SEH envelopes avoid MSVC C2712 and always release a
         // successfully locked surface, including on a native rendering fault.
-        PaintProtected(surface, desc, scene, projected, serial);
+        PaintProtected(surface, desc, scene, projected, serial, stats);
+        stats.liveRejected += static_cast<unsigned>(snapshot.size() - projected.size());
+        LogRender(diagnostic, stats.stage, static_cast<unsigned>(snapshot.size()),
+            static_cast<unsigned>(projected.size()), scene, desc, first, stats);
     }
 }
 #else
 namespace MoveOrderFeedback
 {
-    void Record(TAdynmemStruct*, unsigned, const _Position_Dword&, const _Position_Dword&) {}
+    void Record(TAdynmemStruct*, unsigned, const ActorIdentity&, const _Position_Dword&, const _Position_Dword&) {}
     void Cancel(TAdynmemStruct*, unsigned, const _Position_Dword&) {}
     void Draw(LPDIRECTDRAWSURFACE) {}
 }

@@ -64,6 +64,7 @@ STUBS = r'''
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <mutex>
@@ -71,12 +72,37 @@ STUBS = r'''
 #include <vector>
 #include "MoveOrderFeedbackGeometry.h"
 struct Finally { std::function<void()> cleanup;~Finally(){cleanup();} };
+unsigned rendererAttemptLogs=0,recordRejectionLogs=0;
+bool throwRenderLog=false;
+std::function<void()> duringLog;
+struct IDDrawSurface {
+    static void OutptFmtTxt(const char* format,...) {
+        if(std::strstr(format,"record-rejected"))++recordRejectionLogs;else ++rendererAttemptLogs;
+        if(duringLog)duringLog();
+        if(throwRenderLog)throw std::runtime_error("native logging fault");
+    }
+};
 struct POINT { int x=0,y=0; };
 struct RECT { int left=0,top=0,right=0,bottom=0; };
 struct _Position_Dword { unsigned short x_=0,X=0,z_=0,Z=0,y_=0,Y=0; };
 using Position_Dword = _Position_Dword;
-struct UnitStruct { unsigned unused=0; };
+struct PlayerStruct;
+constexpr unsigned canmove=1;
+struct UnitDefStruct { unsigned UnitTypeMask_0=canmove;int bmcode=1; } definition,otherDefinition;
+struct UnitStruct {
+    short UnitID=1,UnitInGameIndex=0;
+    UnitDefStruct* UnitType=&definition;
+    PlayerStruct* Owner_PlayerPtr0=nullptr;
+    void* UnkPTR2=nullptr;void* Object3do=nullptr;
+    char data9[14]={};
+    unsigned UnitSelected=0x10000000u;float Nanoframe=0;
+    unsigned short XPos__=0,XPos=12,ZPos__=0,ZPos=0,YPos__=0,YPos=12;
+};
 UnitStruct units[16],otherUnits[16];
+int scripts[16]={},models[16]={};
+namespace MoveOrderFeedback {
+struct ActorIdentity { short type;unsigned short birthSalt;std::uintptr_t definition,script,model; };
+}
 struct PlayerInfoStruct { unsigned PropertyMask=0; } info[10];
 struct PlayerStruct {
     PlayerInfoStruct* PlayerInfo=nullptr;
@@ -158,13 +184,34 @@ static void Reset() {
     shared={};world={};worldPtr=&world;clockNow=1000;megaVisible=false;throwProjection=false;
     for(int i=0;i<10;++i) {
         info[i]={};world.Players[i].PlayerInfo=&info[i];world.Players[i].My_PlayerType=Player_LocalHuman;
-        world.Players[i].DirectPlayID=100+i;world.Players[i].Units=units+1;world.Players[i].UnitsAry_End=units+7;
+        world.Players[i].DirectPlayID=100+i;world.Players[i].Units=units;world.Players[i].UnitsAry_End=units+15;
+    }
+    for(int i=0;i<16;++i) {
+        units[i]={};units[i].UnitInGameIndex=static_cast<short>(i);units[i].Owner_PlayerPtr0=&world.Players[0];
+        units[i].UnkPTR2=&scripts[i];units[i].Object3do=&models[i];units[i].data9[0]=static_cast<char>(11+i);
     }
     control.TAmainStruct_Ptr=&world;control.PubCursorX=77;control.PubCursorY=88;
 }
-static void Add(unsigned unit=1) { MoveOrderFeedback::Record(&world,unit,Pos(12,12),Pos(40,28)); }
+static void Send(unsigned unit,Position_Dword origin,Position_Dword destination) {
+    MoveOrderFeedback::ActorIdentity identity={};
+    if(unit<16) {
+        auto& actor=units[unit];actor.XPos=origin.X;actor.XPos__=origin.x_;
+        actor.YPos=origin.Y;actor.YPos__=origin.y_;actor.ZPos=origin.Z;actor.ZPos__=origin.z_;
+        identity.type=actor.UnitID;std::memcpy(&identity.birthSalt,actor.data9,sizeof(identity.birthSalt));
+        identity.definition=reinterpret_cast<std::uintptr_t>(actor.UnitType);
+        identity.script=reinterpret_cast<std::uintptr_t>(actor.UnkPTR2);
+        identity.model=reinterpret_cast<std::uintptr_t>(actor.Object3do);
+    }
+    MoveOrderFeedback::Record(&world,unit,identity,origin,destination);
+}
+static void Add(unsigned unit=1) { Send(unit,Pos(12,12),Pos(40,28)); }
 static void EmptyAfter(const std::function<void()>& change) {
     Reset();Add();change();TestSurface surface;MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
+}
+static void InvalidActorAfter(const std::function<void()>& change) {
+    Reset();Add();const UnitStruct before=units[1];change();TestSurface surface;
+    MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
+    units[1]=before;MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0); // permanently suppressed
 }
 int main() {
     Reset();TestSurface surface;
@@ -172,9 +219,31 @@ int main() {
     Add();MoveOrderFeedback::Cancel(&world,1,Pos(40,28));MoveOrderFeedback::Draw(&surface);
     assert(surface.Green()==0 && surface.locks==0);
 #else
-    Add();MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==234);surface.AssertOutside({8,8,56,40});
+    duringLog=[]{assert(feedbackMutex.try_lock());feedbackMutex.unlock();};
+    throwRenderLog=true;Add();MoveOrderFeedback::Draw(&surface);throwRenderLog=false;
+    assert(surface.At(48,36)==234);surface.AssertOutside({8,8,56,40}); // logging failure is harmless
     clockNow=1499;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()>0);
     clockNow=1500;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
+
+    Reset();Add();surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(20,20)==234);
+    units[1].XPos=28;surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(20,20)==42 && surface.At(36,20)==234 && surface.At(48,36)==234);
+    clockNow=1499;units[1].XPos=32;surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(40,20)==234 && surface.At(48,36)==234); // endpoint and original timer stay fixed
+    clockNow=1500;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
+
+    InvalidActorAfter([]{units[1].UnitID=0;});
+    InvalidActorAfter([]{units[1].UnitID=2;});
+    InvalidActorAfter([]{units[1].UnitType=&otherDefinition;});
+    InvalidActorAfter([]{units[1].Owner_PlayerPtr0=&world.Players[1];});
+    InvalidActorAfter([]{units[1].Object3do=&models[2];});
+    InvalidActorAfter([]{units[1].UnkPTR2=&scripts[2];});
+    InvalidActorAfter([]{++units[1].data9[0];});
+    InvalidActorAfter([]{units[1].UnitInGameIndex=2;});
+    InvalidActorAfter([]{units[1].UnitSelected=0;});
+    InvalidActorAfter([]{units[1].UnitSelected|=0x4000u;});
+    InvalidActorAfter([]{units[1].Nanoframe=0.5f;});
+    InvalidActorAfter([]{units[1].XPos=65535;});
 
     Reset();clockNow=0xffffff00u;Add();clockNow=200;surface.Clean();MoveOrderFeedback::Draw(&surface);
     assert(surface.Green()>0);clockNow=244;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
@@ -199,7 +268,7 @@ int main() {
     assert(surface.Green()==0);Add();MoveOrderFeedback::Cancel(&world,1,Pos(57,28));surface.Clean();MoveOrderFeedback::Draw(&surface);
     assert(surface.Green()>0);
 
-    Reset();Add(16);MoveOrderFeedback::Record(&world,1,Pos(12,12),Pos(65535,28));
+    Reset();Add(16);Send(1,Pos(12,12),Pos(65535,28));
     surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
     Add(15);surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()>0); // inclusive end slot
     Reset();Add(0);surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()>0); // first valid slot
@@ -207,12 +276,12 @@ int main() {
     Reset();world.EyeBallMapXPos=-16;Add();surface.Clean();MoveOrderFeedback::Draw(&surface);
     surface.AssertOutside({24,8,56,40});assert(surface.Green()>0);
     Reset();world.EyeBallMapXPos=10;world.EyeBallMapYPos=6;
-    MoveOrderFeedback::Record(&world,1,Pos(12,12,4),Pos(40,28,8));surface.Clean();MoveOrderFeedback::Draw(&surface);
+    Send(1,Pos(12,12,4),Pos(40,28,8));surface.Clean();MoveOrderFeedback::Draw(&surface);
     assert(surface.At(38,26)==234); // live camera offsets and height projection
 
     Reset();Panel panel;panel.xpos=20;panel.ypos=20;panel.width=24;panel.height=16;
     GUI gui;gui.per_active=&gui;gui.ControlsAry=&panel;world.desktopGUI.TheActive_GUIMEM=&gui;
-    MoveOrderFeedback::Record(&world,1,Pos(0,20),Pos(44,20));surface.Clean();MoveOrderFeedback::Draw(&surface);
+    Send(1,Pos(0,20),Pos(44,20));surface.Clean();MoveOrderFeedback::Draw(&surface);
     for(int y=20;y<36;++y)for(int x=20;x<44;++x)assert(surface.At(x,y)==42);
     assert(surface.Green()>0);
 
@@ -237,6 +306,14 @@ int main() {
     beforeLock=surface.unlocks;
     MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0 && surface.unlocks==beforeLock+1);surface.duringLock={};
     MoveOrderFeedback::Draw(&surface);assert(surface.At(40,36)==234); // fresh camera next frame
+    Reset();Add();surface.Clean();surface.duringLock=[] {units[1].XPos=28;};
+    beforeLock=surface.unlocks;MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(20,20)==42 && surface.At(36,20)==234 && surface.At(48,36)==234
+        && surface.unlocks==beforeLock+1);surface.duringLock={}; // position refreshed after Lock
+    Reset();Add();surface.Clean();surface.duringLock=[] {units[1].UnitID=0;};
+    beforeLock=surface.unlocks;MoveOrderFeedback::Draw(&surface);
+    assert(surface.Green()==0 && surface.unlocks==beforeLock+1);surface.duringLock={};
+    units[1].UnitID=1;MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
 
 #if USEMEGAMAP
     Reset();Add();surface.Clean();surface.duringLock=[] {megaVisible=true;};
@@ -249,13 +326,19 @@ int main() {
     MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0 && surface.unlocks==beforeLock+1);surface.duringLock={};
     Reset();Add();megaVisible=true;surface.Clean();MoveOrderFeedback::Draw(&surface);
     assert(surface.At(12,22)==234 && control.PubCursorX==77 && control.PubCursorY==88);
+    Reset();Send(1,Pos(32,16),Pos(96,48));megaVisible=true;
+    surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(8,16)==234 && surface.At(40,32)==234);
+    units[1].XPos=64;surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(8,16)==42 && surface.At(24,16)==234 && surface.At(40,32)==234);
     Reset();megaVisible=true;
-    MoveOrderFeedback::Record(&world,1,Pos(0,16),Pos(112,16));surface.Clean();MoveOrderFeedback::Draw(&surface);
+    Send(1,Pos(0,16),Pos(112,16));surface.Clean();MoveOrderFeedback::Draw(&surface);
     assert(surface.At(8,16)==234 && surface.At(48,16)==234);surface.AssertOutside({8,8,56,40});
     assert(control.PubCursorX==77 && control.PubCursorY==88);
 #endif
     Reset();for(unsigned i=0;i<capacity+20;++i)Add();
     unsigned active=0;for(const auto& entry:records)if(entry.active)++active;assert(active==capacity);
+    for(unsigned i=0;i<20;++i)Add(16);
+    assert(rendererAttemptLogs==6 && recordRejectionLogs==6); // per-process, across context resets
 #endif
     std::cout << "Move feedback expiry, lifecycle and projection passed\n";
 }

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <atomic>
 
 namespace
 {
@@ -27,6 +28,7 @@ namespace
     std::unique_ptr<SingleHook> callHook;
     bool installed = false;
     const unsigned kMaxOrders = 8192;
+    std::atomic<unsigned> diagnosticCount(0);
 
     struct Observation
     {
@@ -45,6 +47,9 @@ namespace
         unsigned action;
         unsigned before;
         bool prepend;
+        bool beforeValid;
+        const char* stage;
+        MoveOrderFeedback::ActorIdentity identity;
         Position_Dword origin;
         Position_Dword destination;
     };
@@ -110,14 +115,31 @@ namespace
         return true;
     }
 
+    bool CountProtected(UnitStruct& unit, unsigned action, UnitStruct* target,
+        const Position_Dword& destination, unsigned& count)
+    {
+        __try { return CountMatches(unit,action,target,destination,count); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+
     bool Capture(unsigned action, UnitStruct* unit, UnitStruct* target,
         const Position_Dword* position, Observation& out)
     {
         // Observing presentation must never prevent native order delivery.
         __try
         {
+            out.stage = "live";
+            out.action = action & 0xffu;
+            out.unitIndex = ~0u;
+#if PREPEND_ORDERS_ENABLE
+            out.prepend = PrependOrders::Active();
+#endif
             TAdynmemStruct* ta = *TAmainStruct_PtrPtr;
-            if (!position || !LiveMobile(ta,unit) || !COBSciptHandler_Begin || !COBSciptHandler_End) return false;
+            if (!position || !LiveMobile(ta,unit)) return false;
+            out.unitIndex = static_cast<unsigned>(unit-ta->BeginUnitsArray_p);
+            out.type = unit->UnitID;
+            out.stage = "classification";
+            if (!COBSciptHandler_Begin || !COBSciptHandler_End) return false;
             const COBHandle* begin = *COBSciptHandler_Begin;
             const COBHandle* end = *COBSciptHandler_End;
             action &= 0xffu; // Native GUI callers initialize only the low byte.
@@ -138,6 +160,11 @@ namespace
             out.tick = ta->GameTime;
             out.definition = unit->UnitType;
             out.type = unit->UnitID;
+            out.identity.type = unit->UnitID;
+            std::memcpy(&out.identity.birthSalt, unit->data9, sizeof(out.identity.birthSalt));
+            out.identity.definition = reinterpret_cast<std::uintptr_t>(unit->UnitType);
+            out.identity.script = reinterpret_cast<std::uintptr_t>(unit->UnkPTR2);
+            out.identity.model = reinterpret_cast<std::uintptr_t>(unit->Object3do);
             out.unitIndex = static_cast<unsigned>(unit-ta->BeginUnitsArray_p);
             out.action = action;
             out.origin = Position_Dword{};
@@ -148,12 +175,9 @@ namespace
             out.origin.y_ = unit->YPos__;
             out.origin.Y = unit->YPos;
             out.destination = *position;
-#if PREPEND_ORDERS_ENABLE
-            out.prepend = PrependOrders::Active();
-#else
-            out.prepend = false;
-#endif
-            return CountMatches(*unit,action,target,out.destination,out.before);
+            out.stage = "before-invalid";
+            out.beforeValid = CountProtected(*unit,action,target,out.destination,out.before);
+            return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
@@ -163,6 +187,8 @@ namespace
         __try
         {
             TAdynmemStruct* ta = *TAmainStruct_PtrPtr;
+            unsigned short birthSalt = 0;
+            if (LiveMobile(ta,unit)) std::memcpy(&birthSalt, unit->data9, sizeof(birthSalt));
             return ta == observed.world && Playable(ta)
                 && ta->LocalHumanPlayer_PlayerID == observed.player
                 && ta->BeginUnitsArray_p == observed.first && ta->EndOfUnitsArray_p == observed.last
@@ -171,6 +197,9 @@ namespace
                 && observed.owner->Units == observed.ownerFirst && observed.owner->UnitsAry_End == observed.ownerLast
                 && observed.owner->DirectPlayID == observed.dpid
                 && unit->UnitID == observed.type && unit->UnitType == observed.definition
+                && birthSalt == observed.identity.birthSalt
+                && reinterpret_cast<std::uintptr_t>(unit->UnkPTR2) == observed.identity.script
+                && reinterpret_cast<std::uintptr_t>(unit->Object3do) == observed.identity.model
                 && CountMatches(*unit,observed.action,target,observed.destination,count);
         }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -181,11 +210,32 @@ namespace
         __try
         {
             if (cancel) MoveOrderFeedback::Cancel(observed.world,observed.unitIndex,observed.destination);
-            else MoveOrderFeedback::Record(observed.world,observed.unitIndex,observed.origin,observed.destination);
+            else MoveOrderFeedback::Record(observed.world,observed.unitIndex,observed.identity,observed.origin,observed.destination);
         }
         // Let C++ exceptions unwind to the outer catch, but contain presentation
         // access violations independently of the native command that just ran.
         __except (GetExceptionCode() == 0xE06D7363u ? EXCEPTION_CONTINUE_SEARCH : EXCEPTION_EXECUTE_HANDLER) {}
+    }
+
+    void DiagnosticProtected(const Observation& observed, const char* stage, int shift, unsigned after)
+    {
+        __try
+        {
+            IDDrawSurface::OutptFmtTxt("[MoveOrderFeedback] stage=%s unit=%d action=%u type=%d prepend=%u shift=%d beforeValid=%u before=%u after=%u",
+                stage, static_cast<int>(observed.unitIndex), observed.action, observed.type,
+                static_cast<unsigned>(observed.prepend), shift, static_cast<unsigned>(observed.beforeValid), observed.before, after);
+        }
+        __except (GetExceptionCode() == 0xE06D7363u ? EXCEPTION_CONTINUE_SEARCH : EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    void Diagnostic(const Observation& observed, const char* stage, int shift, unsigned after)
+    {
+        unsigned used = diagnosticCount.load(std::memory_order_relaxed);
+        while (used < 12)
+        {
+            if (!diagnosticCount.compare_exchange_weak(used, used+1, std::memory_order_relaxed)) continue;
+            try { DiagnosticProtected(observed,stage,shift,after); } catch (...) {}
+            break;
+        }
     }
 
     bool CodeMatches(const unsigned char* bytes)
@@ -208,17 +258,21 @@ namespace MoveOrderFeedback
         NativeSend(action,shift,unit,target,position,param1,param2);
 #endif
         unsigned after = 0;
-        if (!captured || !After(observed,unit,target,after)) return;
+        if (!captured) { Diagnostic(observed,observed.stage,shift,after); return; }
+        if (!After(observed,unit,target,after)) { Diagnostic(observed,"after-invalid",shift,after); return; }
+        const char* stage = "no-match";
         try
         {
             if (observed.prepend || shift)
             {
-                if (after > observed.before) Present(observed,false);
-                else if (after < observed.before) Present(observed,true);
+                if (!observed.beforeValid) stage = "before-invalid";
+                else if (after > observed.before) { stage = "record"; Present(observed,false); }
+                else if (after < observed.before) { stage = "cancel"; Present(observed,true); }
             }
-            else if (after) Present(observed,false);
+            else if (after) { stage = "record"; Present(observed,false); }
         }
         catch (...) {} // Rendering allocation failure must not affect a sent order.
+        Diagnostic(observed,stage,shift,after);
     }
 
     void Install()
@@ -242,7 +296,7 @@ namespace MoveOrderFeedback
             catch (...) { return; }
         }
         installed = true;
-        IDDrawSurface::OutptTxt("[MoveOrderFeedback] build=destinations-v1");
+        IDDrawSurface::OutptTxt("[MoveOrderFeedback] build=destinations-v2");
     }
 }
 #else

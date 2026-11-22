@@ -32,13 +32,17 @@ def extract(source, signature):
 HARNESS = r'''
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 #define __stdcall
 using LPDIRECTDRAWSURFACE = void*;
@@ -56,6 +60,9 @@ struct UnitStruct {
     short UnitID=1;
     UnitDefStruct* UnitType=nullptr;
     PlayerStruct* Owner_PlayerPtr0=nullptr;
+    void* UnkPTR2=reinterpret_cast<void*>(0x1000u);
+    void* Object3do=reinterpret_cast<void*>(0x2000u);
+    char data9[14]={0x34,0x12};
     unsigned UnitSelected=0x10000000u;
     float Nanoframe=0.0f;
     UnitOrdersStruct* UnitOrders=nullptr;
@@ -130,21 +137,21 @@ namespace PrependOrders {
         MockSend(action,shift,unit,target,pos,p1,p2);
     }
 }
-struct Mark { TAdynmemStruct* world; unsigned index; Position_Dword origin,destination; };
+// PRODUCTION_HEADER
+struct Mark { TAdynmemStruct* world; unsigned index; MoveOrderFeedback::ActorIdentity identity; Position_Dword origin,destination; };
 static std::vector<Mark> recorded;
 static std::vector<Mark> cancelled;
 static bool throwRecord=false;
 namespace MoveOrderFeedback {
-    void Record(TAdynmemStruct* world,unsigned index,const Position_Dword& origin,const Position_Dword& dest) {
+    void Record(TAdynmemStruct* world,unsigned index,const ActorIdentity& identity,const Position_Dword& origin,const Position_Dword& dest) {
         if (throwRecord) throw std::bad_alloc();
-        recorded.push_back({world,index,origin,dest});
+        recorded.push_back({world,index,identity,origin,dest});
     }
     void Cancel(TAdynmemStruct* world,unsigned index,const Position_Dword& dest) {
         if (throwRecord) throw std::bad_alloc();
-        cancelled.push_back({world,index,{},dest});
+        cancelled.push_back({world,index,{},{},dest});
     }
 }
-// PRODUCTION_HEADER
 
 static const std::array<unsigned char,5> originalCode={{0xE8,0xC7,0xDD,0xFA,0xFF}};
 static std::array<unsigned char,5> code=originalCode;
@@ -161,7 +168,15 @@ struct SingleHook {
     ~SingleHook() { ++hooksDestroyed; code=previous; }
 };
 static bool MockCodeMatches(const unsigned char* bytes) { return !failRead && std::memcmp(code.data(),bytes,5)==0; }
-struct IDDrawSurface { static void OutptTxt(const char*) {} };
+static std::vector<std::string> diagnostics;
+static bool throwCountRead=false;
+struct IDDrawSurface {
+    static void OutptTxt(const char*) {}
+    static void OutptFmtTxt(const char* format,...) {
+        char line[512];va_list args;va_start(args,format);vsnprintf(line,sizeof(line),format,args);va_end(args);
+        diagnostics.emplace_back(line);
+    }
+};
 // PRODUCTION_MODULE
 
 static std::vector<std::unique_ptr<UnitOrdersStruct>> nodes;
@@ -192,12 +207,13 @@ struct Scenario {
 };
 static void Reset() {
 #if DRAWN_MOVE_FORMATIONS_ENABLE
-    callHook.reset();installed=false;
+    callHook.reset();installed=false;diagnosticCount.store(0);
 #endif
     world=nullptr;nodes.clear();sent.clear();recorded.clear();cancelled.clear();onSend={};
     activePrepend=rejectPrepend=throwAction=mutateProbe=throwRecord=false;
     prependCalls=actionQueries=hooksCreated=hooksDestroyed=0;
     failWrite=throwHook=failRead=false;code=originalCode;
+    diagnostics.clear();throwCountRead=false;
     beginActions=actionTable;endActions=actionTable+128;
 }
 static void Issue(UnitStruct* actor,const Position_Dword& pos,int shift=0,unsigned action=25,UnitStruct* target=nullptr) {
@@ -228,6 +244,9 @@ static void TestNativeAcceptedMovesAndImmutableOrigins() {
         const auto& mark=recorded.front();
         assert(mark.world==&s.state &&mark.index==1 &&mark.origin.X==100 &&mark.origin.Y==200 &&mark.origin.Z==40);
         assert(mark.destination.X==500 &&mark.destination.Y==600 &&p.X==500);
+        assert(mark.identity.type==s.actor().UnitID &&mark.identity.birthSalt==0x1234u);
+        assert(mark.identity.definition==reinterpret_cast<std::uintptr_t>(s.actor().UnitType));
+        assert(mark.identity.script==0x1000u &&mark.identity.model==0x2000u);
     }
     Reset();Scenario s;Position_Dword p=Position();Add(s.actor(),p);
     onSend=[&]{s.actor().UnitOrders=nullptr;Add(s.actor(),p);};
@@ -298,7 +317,7 @@ static void TestFiltersNeverSuppressNativeDelivery() {
     }
 }
 static void TestPostDispatchContextAndBadQueues() {
-    for(unsigned failure=0;failure<10;++failure) {
+    for(unsigned failure=0;failure<13;++failure) {
         Reset();Scenario s;Position_Dword p=Position();
         onSend=[&]{
             Add(s.actor(),p);
@@ -308,6 +327,8 @@ static void TestPostDispatchContextAndBadQueues() {
             case 4:s.state.Players[0].UnitsAry_End=s.units+2;break;case 5:s.state.Players[0].DirectPlayID=99;break;
             case 6:++s.actor().UnitID;break;case 7:s.actor().UnitType=&s.defs[2];break;
             case 8:s.actor().Owner_PlayerPtr0=&s.state.Players[1];break;case 9:shared.PlayingDemo=1;break;
+            case 10:++s.actor().data9[0];break;case 11:s.actor().UnkPTR2=nullptr;break;
+            case 12:s.actor().Object3do=nullptr;break;
             }
         };
         Issue(&s.actor(),p);
@@ -324,6 +345,31 @@ static void TestPostDispatchContextAndBadQueues() {
         tail=n.get();nodes.push_back(std::move(n));
     }
     Issue(&s2.actor(),p);assert(sent.size()==1 &&recorded.empty());
+}
+static void TestUnreadablePriorQueueDoesNotSuppressReplacement() {
+    for(unsigned failure=0;failure<3;++failure) for(int shift:{0,1}) for(bool prepend:{false,true}) {
+#if !PREPEND_ORDERS_ENABLE
+        if(prepend)continue;
+#endif
+        Reset();Scenario s;Position_Dword p=Position();activePrepend=prepend;
+        auto* old=Add(s.actor(),Position(100,200),0);
+        if(failure==0)old->Unit_ptr=nullptr;
+        if(failure==1)old->NextOrder=old;
+        if(failure==2)throwCountRead=true;
+        onSend=[&]{throwCountRead=false;old->NextOrder=nullptr;s.actor().UnitOrders=nullptr;Add(s.actor(),p);};
+        Issue(&s.actor(),p,shift);
+        assert(sent.size()==1 &&cancelled.empty());
+        assert(recorded.size()==unsigned(!shift &&!prepend));
+        assert(diagnostics.size()==1 &&diagnostics.front().find("beforeValid=0")!=std::string::npos);
+        assert(diagnostics.front().find(!shift &&!prepend ? "stage=record" : "stage=before-invalid")!=std::string::npos);
+    }
+}
+static void TestDiagnosticsAreBoundedAndPassive() {
+    Reset();Scenario s;Position_Dword p=Position();
+    onSend=[&]{Add(s.actor(),p);};
+    for(unsigned i=0;i<20;++i)Issue(&s.actor(),p);
+    assert(sent.size()==20 &&recorded.size()==20 &&diagnostics.size()==12);
+    assert(diagnostics.front().find("stage=record unit=1 action=25 type=1 prepend=0 shift=0 beforeValid=1 before=0 after=1")!=std::string::npos);
 }
 static void TestObserverFailureAndGroupedUnitDestinations() {
     Reset();Scenario s;Position_Dword a=Position(500,600),b=Position(700,800);
@@ -357,7 +403,8 @@ int main() {
     TestNativeAcceptedMovesAndImmutableOrigins();TestShiftCancellationAndPrependRefusal();
     TestExactFixedPointCancellationTolerance();TestActivePrependNativeAppendCancellation();
     TestFiltersNeverSuppressNativeDelivery();
-    TestPostDispatchContextAndBadQueues();TestObserverFailureAndGroupedUnitDestinations();
+    TestPostDispatchContextAndBadQueues();TestUnreadablePriorQueueDoesNotSuppressReplacement();
+    TestDiagnosticsAreBoundedAndPassive();TestObserverFailureAndGroupedUnitDestinations();
     TestSingleHookOwnershipAndRollback();
     std::cout << "Move feedback capture, native forwarding, cancellation and shared hook ownership passed\n";
 #else
@@ -380,6 +427,7 @@ def prepare_source():
     source = source.replace('reinterpret_cast<Send>(0x0043AFC0u)', 'static_cast<Send>(&MockSend)')
     source = source.replace('__except (GetExceptionCode() == 0xE06D7363u ? EXCEPTION_CONTINUE_SEARCH : EXCEPTION_EXECUTE_HANDLER)', 'catch (...)')
     source = source.replace('__try', 'try').replace('__except (EXCEPTION_EXECUTE_HANDLER)', 'catch (...)')
+    source = source.replace('count = 0;', 'if (throwCountRead) throw std::runtime_error("queue read fault");\n        count = 0;')
     header = (DDRAW / 'MoveOrderFeedback.h').read_text()
     header = re.sub(r'^\s*(?:#include[^\n]*|#pragma once)\s*$', '', header, flags=re.M)
     return HARNESS.replace('// PRODUCTION_HEADER', header).replace('// PRODUCTION_MODULE', source)

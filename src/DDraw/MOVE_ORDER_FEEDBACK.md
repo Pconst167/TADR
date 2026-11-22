@@ -1,9 +1,10 @@
 # Move order destination feedback
 
 An accepted move command briefly shows a green line and a green arrow at each
-unit's destination. Each line starts at the unit's position when the command
-was issued. The feedback lasts **0.5 seconds**, including while the game is
-paused, and appears on both the battlefield and megamap without holding Shift.
+unit's destination. Each line follows its unit as it moves while its destination
+arrow stays fixed. The feedback lasts **0.5 seconds** from the command, including
+while the game is paused, and appears on both the battlefield and megamap
+without holding Shift.
 
 This applies to ordinary moves, queued moves, Ctrl+Shift priority moves and
 Alt-drag formations. Formation arrows show the individual destinations assigned
@@ -43,16 +44,19 @@ both immediate and appended destinations, including native Shift cancellation.
 When queue prepending is included, the two features share the same guarded call
 wrapper so commands are dispatched once.
 
-Snapshots contain positions and a unit index, rather than retained unit or
-order pointers. A bounded buffer keeps input capture allocation-free. Feedback
-is cleared when the game or local player context changes, and is not shown
-while watching a replay or spectating. The renderer does not issue commands or
-change simulation state.
+Snapshots contain the destination, unit index and actor identity values. Each
+frame resolves the unit from the current game bank and checks its identity and
+liveness before reading its position; cached pointer values are compared, never
+dereferenced. Observed death or replacement ends that unit's feedback. A bounded
+buffer keeps input capture allocation-free. Feedback clears when the game or
+local player context changes, and is not shown while watching a replay or
+spectating. The renderer does not issue commands or change simulation state.
 
 ## Validation
 
 Portable geometry, controller and native capture tests cover clipping, endpoint
-arrows, expiry, context changes, accepted/cancelled/refused commands and the
+arrows, moving origins, unit replacement, expiry, context changes, accepted/
+cancelled/refused commands and the
 prepending combinations. Existing formation, queue, grid, extractor and allied
 cursor regressions run alongside them.
 
