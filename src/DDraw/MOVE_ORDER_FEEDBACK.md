@@ -13,7 +13,10 @@ than when the units eventually reach that part of the queue. Cancelling a
 queued destination removes its matching temporary feedback. Refused commands
 do not create destination feedback.
 
-The arrow has a black outline for visibility on light terrain. Its size follows
+The green lines/arrows and dark arrow outlines blend at approximately **50%
+opacity** with the terrain beneath them. A cached palette lookup keeps this
+fast on TA's indexed-color surface. The live palette is checked on each draw,
+and each pixel of a marker is blended only once. The arrow size follows
 the current view: larger on the battlefield and smaller on the megamap. Lines
 and arrows are clipped to the map view and kept out of native popup panels.
 
@@ -57,9 +60,9 @@ spectating. The renderer does not issue commands or change simulation state.
 ## Validation
 
 Portable geometry, controller and native capture tests cover clipping, endpoint
-arrows, moving origins, unit replacement, expiry, context changes, accepted/
-cancelled/refused commands and the
-prepending combinations. Existing formation, queue, grid, extractor and allied
+arrows, palette blending and changes, moving origins, unit replacement, expiry,
+context changes, accepted/cancelled/refused commands and the prepending
+combinations. Existing formation, queue, grid, extractor and allied
 cursor regressions run alongside them.
 
 The dedicated workflow builds Escalation and ProTA with feedback, Escalation
