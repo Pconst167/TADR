@@ -42,7 +42,9 @@ The capture wrapper observes the native user move-order call and records a
 presentation snapshot only after the engine accepts the command. It handles
 both immediate and appended destinations, including native Shift cancellation.
 When queue prepending is included, the two features share the same guarded call
-wrapper so commands are dispatched once.
+wrapper so commands are dispatched once. Accepted native moves determine
+eligibility; constructor progress and legacy movement-capability hints do not
+suppress feedback for commanders or other units whose move was accepted.
 
 Snapshots contain the destination, unit index and actor identity values. Each
 frame resolves the unit from the current game bank and checks its identity and

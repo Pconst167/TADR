@@ -271,8 +271,7 @@ namespace
                 || reinterpret_cast<std::uintptr_t>(unit->Object3do) != record.identity.model
                 || birthSalt != record.identity.birthSalt || unit->Owner_PlayerPtr0 != owner
                 || !(unit->UnitSelected & 0x10000000u) || (unit->UnitSelected & 0x4000u)
-                || unit->Nanoframe != 0.0f || !unit->UnitType
-                || !(unit->UnitType->UnitTypeMask_0 & canmove) || unit->UnitType->bmcode == 0)
+                || !unit->UnitType)
                 return false;
             origin = Position_Dword{};
             origin.x_ = unit->XPos__; origin.X = unit->XPos;

@@ -55,7 +55,7 @@ using Position_Dword = _Position_Dword;
 static_assert(sizeof(Position_Dword)==12,"Native fixed-point position");
 struct PlayerStruct;
 struct UnitOrdersStruct;
-struct UnitDefStruct { unsigned UnitTypeMask_0=canmove; int bmcode=1; };
+struct UnitDefStruct { unsigned UnitTypeMask_0=canmove,UnitTypeMask_1=0x80u; int bmcode=1; };
 struct UnitStruct {
     short UnitID=1;
     UnitDefStruct* UnitType=nullptr;
@@ -275,6 +275,31 @@ static void TestShiftCancellationAndPrependRefusal() {
     assert(recorded.size()==1);
 #endif
 }
+static void TestNativeAcceptanceOverridesLegacyCapabilities() {
+    for(unsigned fields=0;fields<4;++fields) for(bool accepted:{false,true}) {
+        Reset();Scenario s;Position_Dword p=Position();
+        // Starting/completed commanders can retain capability/construction
+        // metadata that disagrees with the native accepted movement command.
+        if(fields==0 ||fields==3)s.actor().Nanoframe=0.5f;
+        if(fields==1 ||fields==3)s.actor().UnitType->UnitTypeMask_0=0;
+        if(fields==2 ||fields==3)s.actor().UnitType->bmcode=0;
+        if(accepted)onSend=[&]{Add(s.actor(),p);};
+        Issue(&s.actor(),p);
+        assert(sent.size()==1 &&recorded.size()==unsigned(accepted) &&cancelled.empty());
+        assert(diagnostics.size()==1 &&diagnostics.front().find("reason=ok bounded=1")!=std::string::npos);
+        assert(diagnostics.front().find(accepted ? "stage=record" : "stage=no-match")!=std::string::npos);
+    }
+}
+static void TestLiveRejectionDiagnostics() {
+    Reset();Scenario s;Position_Dword p=Position();s.actor().UnitSelected|=0x4000u;
+    onSend=[&]{Add(s.actor(),p);};Issue(&s.actor(),p);
+    assert(sent.size()==1 &&recorded.empty());
+    assert(diagnostics.front().find("stage=live unit=1")!=std::string::npos);
+    assert(diagnostics.front().find("reason=pending-death bounded=1 flags=0x10004000")!=std::string::npos);
+    Reset();Scenario s2;
+    MoveOrderFeedback::Dispatch(25,0,&s2.actor(),nullptr,nullptr,71,72);
+    assert(sent.size()==1 &&recorded.empty() &&diagnostics.front().find("reason=position-null")!=std::string::npos);
+}
 static void TestExactFixedPointCancellationTolerance() {
     Position_Dword a=Position(500,600),b=a;
     b.X=484;assert(Nearby(a,b));
@@ -401,6 +426,7 @@ int main() {
     TestForwarding();
 #if DRAWN_MOVE_FORMATIONS_ENABLE
     TestNativeAcceptedMovesAndImmutableOrigins();TestShiftCancellationAndPrependRefusal();
+    TestNativeAcceptanceOverridesLegacyCapabilities();TestLiveRejectionDiagnostics();
     TestExactFixedPointCancellationTolerance();TestActivePrependNativeAppendCancellation();
     TestFiltersNeverSuppressNativeDelivery();
     TestPostDispatchContextAndBadQueues();TestUnreadablePriorQueueDoesNotSuppressReplacement();

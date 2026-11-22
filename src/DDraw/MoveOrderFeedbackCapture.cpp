@@ -49,6 +49,10 @@ namespace
         bool prepend;
         bool beforeValid;
         const char* stage;
+        const char* liveReason;
+        bool diagnosticBounds;
+        unsigned diagnosticFlags, diagnosticMask0, diagnosticMask1, diagnosticBmcode;
+        float diagnosticNanoframe;
         MoveOrderFeedback::ActorIdentity identity;
         Position_Dword origin;
         Position_Dword destination;
@@ -72,16 +76,60 @@ namespace
         return first && last && a <= b && p >= a && p <= b && (p-a)%sizeof(UnitStruct) == 0;
     }
 
-    bool LiveMobile(TAdynmemStruct* ta, UnitStruct* unit)
+    const char* LiveRejection(TAdynmemStruct* ta, UnitStruct* unit)
     {
-        if (!Playable(ta) || !unit) return false;
-        PlayerStruct* owner = &ta->Players[ta->LocalHumanPlayer_PlayerID];
-        return InBank(unit, owner->Units, owner->UnitsAry_End)
-            && InBank(unit, ta->BeginUnitsArray_p, ta->EndOfUnitsArray_p)
-            && unit->UnitID && unit->UnitType && unit->Owner_PlayerPtr0 == owner
-            && (unit->UnitSelected & 0x10000000u) && !(unit->UnitSelected & 0x4000u)
-            && unit->Nanoframe == 0.0f && (unit->UnitType->UnitTypeMask_0 & canmove)
-            && unit->UnitType->bmcode != 0;
+        if (!ta) return "world";
+        if (!DataShare) return "shared-state";
+        if (DataShare->TAProgress != TAInGame) return "progress";
+        if (DataShare->PlayingDemo) return "demo";
+        if (DataShare->ehaOff) return "disabled";
+        const int player = ta->LocalHumanPlayer_PlayerID;
+        if (player < 0 || player >= 10) return "player-index";
+        PlayerStruct* owner = &ta->Players[player];
+        if (!owner->PlayerInfo) return "player-info";
+        if (owner->PlayerInfo->PropertyMask & WATCH) return "watcher";
+        if (owner->My_PlayerType != Player_LocalHuman) return "controller";
+        if (!unit) return "unit-null";
+        if (!InBank(unit, ta->BeginUnitsArray_p, ta->EndOfUnitsArray_p)) return "global-bank";
+        if (!InBank(unit, owner->Units, owner->UnitsAry_End)) return "owner-bank";
+        if (!unit->UnitID) return "empty-slot";
+        if (!unit->UnitType) return "definition";
+        if (unit->Owner_PlayerPtr0 != owner) return "owner";
+        if (!(unit->UnitSelected & 0x10000000u)) return "not-alive";
+        if (unit->UnitSelected & 0x4000u) return "pending-death";
+        // Accepted native MOVE and its queued destination are authoritative.
+        // Legacy constructor/capability fields are not lifetime checks.
+        return nullptr;
+    }
+    bool LiveOwned(TAdynmemStruct* ta, UnitStruct* unit)
+    {
+        return !LiveRejection(ta,unit);
+    }
+    void CaptureLiveDiagnostics(TAdynmemStruct* ta, UnitStruct* unit, Observation& out)
+    {
+        // Optional diagnostics must not add eligibility requirements or keep
+        // dereferencing native definitions after the bounded log allowance.
+        if (diagnosticCount.load(std::memory_order_relaxed) >= 12) return;
+        __try
+        {
+            if (!ta || !unit) return;
+            const int player = ta->LocalHumanPlayer_PlayerID;
+            if (player < 0 || player >= 10
+                || !InBank(unit,ta->BeginUnitsArray_p,ta->EndOfUnitsArray_p)
+                || !InBank(unit,ta->Players[player].Units,ta->Players[player].UnitsAry_End)) return;
+            out.unitIndex = static_cast<unsigned>(unit-ta->BeginUnitsArray_p);
+            out.type = unit->UnitID;
+            out.diagnosticFlags = unit->UnitSelected;
+            out.diagnosticNanoframe = unit->Nanoframe;
+            out.diagnosticBounds = true;
+            if (unit->UnitType)
+            {
+                out.diagnosticMask0 = unit->UnitType->UnitTypeMask_0;
+                out.diagnosticMask1 = unit->UnitType->UnitTypeMask_1;
+                out.diagnosticBmcode = unit->UnitType->bmcode;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
     bool Nearby(const Position_Dword& a, const Position_Dword& b)
@@ -135,7 +183,10 @@ namespace
             out.prepend = PrependOrders::Active();
 #endif
             TAdynmemStruct* ta = *TAmainStruct_PtrPtr;
-            if (!position || !LiveMobile(ta,unit)) return false;
+            CaptureLiveDiagnostics(ta,unit,out);
+            out.liveReason = "native-read";
+            out.liveReason = !position ? "position-null" : LiveRejection(ta,unit);
+            if (out.liveReason) return false;
             out.unitIndex = static_cast<unsigned>(unit-ta->BeginUnitsArray_p);
             out.type = unit->UnitID;
             out.stage = "classification";
@@ -188,12 +239,12 @@ namespace
         {
             TAdynmemStruct* ta = *TAmainStruct_PtrPtr;
             unsigned short birthSalt = 0;
-            if (LiveMobile(ta,unit)) std::memcpy(&birthSalt, unit->data9, sizeof(birthSalt));
+            if (LiveOwned(ta,unit)) std::memcpy(&birthSalt, unit->data9, sizeof(birthSalt));
             return ta == observed.world && Playable(ta)
                 && ta->LocalHumanPlayer_PlayerID == observed.player
                 && ta->BeginUnitsArray_p == observed.first && ta->EndOfUnitsArray_p == observed.last
                 && ta->GameTime >= observed.tick
-                && LiveMobile(ta,unit) && unit->Owner_PlayerPtr0 == observed.owner
+                && LiveOwned(ta,unit) && unit->Owner_PlayerPtr0 == observed.owner
                 && observed.owner->Units == observed.ownerFirst && observed.owner->UnitsAry_End == observed.ownerLast
                 && observed.owner->DirectPlayID == observed.dpid
                 && unit->UnitID == observed.type && unit->UnitType == observed.definition
@@ -221,9 +272,12 @@ namespace
     {
         __try
         {
-            IDDrawSurface::OutptFmtTxt("[MoveOrderFeedback] stage=%s unit=%d action=%u type=%d prepend=%u shift=%d beforeValid=%u before=%u after=%u",
+            IDDrawSurface::OutptFmtTxt("[MoveOrderFeedback] stage=%s unit=%d action=%u type=%d prepend=%u shift=%d beforeValid=%u before=%u after=%u reason=%s bounded=%u flags=0x%08X nano=%g mask0=0x%08X mask1=0x%08X bmcode=%u",
                 stage, static_cast<int>(observed.unitIndex), observed.action, observed.type,
-                static_cast<unsigned>(observed.prepend), shift, static_cast<unsigned>(observed.beforeValid), observed.before, after);
+                static_cast<unsigned>(observed.prepend), shift, static_cast<unsigned>(observed.beforeValid), observed.before, after,
+                observed.liveReason ? observed.liveReason : "ok", static_cast<unsigned>(observed.diagnosticBounds),
+                observed.diagnosticFlags, static_cast<double>(observed.diagnosticNanoframe),
+                observed.diagnosticMask0, observed.diagnosticMask1, observed.diagnosticBmcode);
         }
         __except (GetExceptionCode() == 0xE06D7363u ? EXCEPTION_CONTINUE_SEARCH : EXCEPTION_EXECUTE_HANDLER) {}
     }
@@ -296,7 +350,7 @@ namespace MoveOrderFeedback
             catch (...) { return; }
         }
         installed = true;
-        IDDrawSurface::OutptTxt("[MoveOrderFeedback] build=destinations-v2");
+        IDDrawSurface::OutptTxt("[MoveOrderFeedback] build=destinations-v3");
     }
 }
 #else

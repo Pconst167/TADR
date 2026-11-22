@@ -242,8 +242,14 @@ int main() {
     InvalidActorAfter([]{units[1].UnitInGameIndex=2;});
     InvalidActorAfter([]{units[1].UnitSelected=0;});
     InvalidActorAfter([]{units[1].UnitSelected|=0x4000u;});
-    InvalidActorAfter([]{units[1].Nanoframe=0.5f;});
     InvalidActorAfter([]{units[1].XPos=65535;});
+
+    // Native accepted MOVE is authoritative even when legacy mobility metadata
+    // differs for commanders; feedback must still follow their current position.
+    Reset();units[1].Nanoframe=0.5f;definition.UnitTypeMask_0=0;definition.bmcode=0;
+    Add();units[1].XPos=28;surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(36,20)==234 && surface.At(48,36)==234);
+    definition.UnitTypeMask_0=canmove;definition.bmcode=1;
 
     Reset();clockNow=0xffffff00u;Add();clockNow=200;surface.Clean();MoveOrderFeedback::Draw(&surface);
     assert(surface.Green()>0);clockNow=244;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
