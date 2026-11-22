@@ -162,7 +162,7 @@ struct TestSurface {
         return DD_OK;
     }
     int Unlock(void*) { ++unlocks;return DD_OK; }
-    int Green() const { return static_cast<int>(std::count(bytes.begin(),bytes.end(),138)); }
+    int Green() const { return static_cast<int>(std::count(bytes.begin(),bytes.end(),196)); }
     unsigned char At(int x,int y) const { return bytes[y*pitch+x]; }
     void Clean() { std::fill(bytes.begin(),bytes.end(),42); }
     void AssertOutside(MoveOrderFeedbackGeometry::Rect clip) const {
@@ -238,15 +238,15 @@ int main() {
 #else
     duringLog=[]{assert(feedbackMutex.try_lock());feedbackMutex.unlock();};
     throwRenderLog=true;Add();MoveOrderFeedback::Draw(&surface);throwRenderLog=false;
-    assert(surface.At(48,36)==138);surface.AssertOutside({8,8,56,40}); // logging failure is harmless
+    assert(surface.At(48,36)==196);surface.AssertOutside({8,8,56,40}); // logging failure is harmless
     clockNow=1499;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()>0);
     clockNow=1500;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
 
-    Reset();Add();surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(20,20)==138);
+    Reset();Add();surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(20,20)==196);
     units[1].XPos=28;surface.Clean();MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(20,20)==42 && surface.At(36,20)==138 && surface.At(48,36)==138);
+    assert(surface.At(20,20)==42 && surface.At(36,20)==196 && surface.At(48,36)==196);
     clockNow=1499;units[1].XPos=32;surface.Clean();MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(40,20)==138 && surface.At(48,36)==138); // endpoint and original timer stay fixed
+    assert(surface.At(40,20)==196 && surface.At(48,36)==196); // endpoint and original timer stay fixed
     clockNow=1500;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
 
     InvalidActorAfter([]{units[1].UnitID=0;});
@@ -265,11 +265,12 @@ int main() {
     // differs for commanders; feedback must still follow their current position.
     Reset();units[1].Nanoframe=0.5f;definition.UnitTypeMask_0=0;definition.bmcode=0;
     Add();units[1].XPos=28;surface.Clean();MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(36,20)==138 && surface.At(48,36)==138);
+    assert(surface.At(36,20)==196 && surface.At(48,36)==196);
     definition.UnitTypeMask_0=canmove;definition.bmcode=1;
 
     Reset();Add();surface.Clean();MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(48,36)==138); // exactly half of grayscale background42 + foreground234
+    assert(surface.At(48,36)==196); // 80% foreground234 over grayscale background42
+    assert(std::count(surface.bytes.begin(),surface.bytes.end(),8)>0); // 80% black outline over background42
     const unsigned buildsBefore=blendBuilds;
     for(unsigned i=0;i<12;++i)Add();
     for(unsigned i=0;i<3;++i){surface.Clean();MoveOrderFeedback::Draw(&surface);}
@@ -278,16 +279,16 @@ int main() {
     const unsigned beforeChange=blendBuilds;
     for(unsigned c=0;c<3;++c)programMemory[0x214+234*4+c]=200;
     surface.Clean();MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(48,36)==121 && blendBuilds==beforeChange+1); // same native pointer, changed RGB
-    surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==121 && blendBuilds==beforeChange+1);
+    assert(surface.At(48,36)==168 && blendBuilds==beforeChange+1); // same native pointer, foreground200 over background42 becomes168
+    surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==168 && blendBuilds==beforeChange+1);
     programMemory[0x214+255*4+2]=0;surface.Clean();MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(48,36)==121 && blendBuilds==beforeChange+2); // all 256 palette entries participate
+    assert(surface.At(48,36)==168 && blendBuilds==beforeChange+2); // all 256 palette entries participate
     programMemory[0x214+42*4+3]=99;surface.Clean();MoveOrderFeedback::Draw(&surface);
     assert(blendBuilds==beforeChange+2); // padding byte is not a color change
 
     Reset();Add();world.TAProgramStruct_Ptr=nullptr;surface.Clean();int paletteLocks=surface.locks;
     MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0 && surface.locks==paletteLocks);
-    world.TAProgramStruct_Ptr=programMemory.data();MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==138);
+    world.TAProgramStruct_Ptr=programMemory.data();MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==196);
     Reset();Add();throwPaletteRead=true;surface.Clean();paletteLocks=surface.locks;
     MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0 && surface.locks==paletteLocks);
     throwPaletteRead=false;
@@ -297,16 +298,16 @@ int main() {
     int paletteUnlocks=surface.unlocks;MoveOrderFeedback::Draw(&surface);
     assert(std::count(surface.bytes.begin(),surface.bytes.end(),42)==static_cast<int>(surface.bytes.size())
         && surface.unlocks==paletteUnlocks+1);surface.duringLock={};
-    MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==121); // transition skipped, next frame rebuilt
+    MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==168); // transition skipped, next frame rebuilt
     Reset();Add();surface.Clean();surface.duringLock=[]{throwPaletteRead=true;};
     paletteUnlocks=surface.unlocks;MoveOrderFeedback::Draw(&surface);
     assert(std::count(surface.bytes.begin(),surface.bytes.end(),42)==static_cast<int>(surface.bytes.size())
         && surface.unlocks==paletteUnlocks+1);surface.duringLock={};throwPaletteRead=false;
-    MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==138); // read fault preserves feedback for retry
+    MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==196); // read fault preserves feedback for retry
     Reset();Add();for(unsigned c=0;c<3;++c)programMemory[0x214+234*4+c]=200;
     throwBlendBuild=true;surface.Clean();paletteLocks=surface.locks;
     MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0 && surface.locks==paletteLocks);
-    throwBlendBuild=false;MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==121);
+    throwBlendBuild=false;MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==168);
 
     Reset();clockNow=0xffffff00u;Add();clockNow=200;surface.Clean();MoveOrderFeedback::Draw(&surface);
     assert(surface.Green()>0);clockNow=244;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
@@ -340,7 +341,7 @@ int main() {
     surface.AssertOutside({24,8,56,40});assert(surface.Green()>0);
     Reset();world.EyeBallMapXPos=10;world.EyeBallMapYPos=6;
     Send(1,Pos(12,12,4),Pos(40,28,8));surface.Clean();MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(38,26)==138); // live camera offsets and height projection
+    assert(surface.At(38,26)==196); // live camera offsets and height projection
 
     Reset();Panel panel;panel.xpos=20;panel.ypos=20;panel.width=24;panel.height=16;
     GUI gui;gui.per_active=&gui;gui.ControlsAry=&panel;world.desktopGUI.TheActive_GUIMEM=&gui;
@@ -368,10 +369,10 @@ int main() {
     Reset();Add();surface.Clean();surface.duringLock=[] {world.EyeBallMapXPos=8;};
     beforeLock=surface.unlocks;
     MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0 && surface.unlocks==beforeLock+1);surface.duringLock={};
-    MoveOrderFeedback::Draw(&surface);assert(surface.At(40,36)==138); // fresh camera next frame
+    MoveOrderFeedback::Draw(&surface);assert(surface.At(40,36)==196); // fresh camera next frame
     Reset();Add();surface.Clean();surface.duringLock=[] {units[1].XPos=28;};
     beforeLock=surface.unlocks;MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(20,20)==42 && surface.At(36,20)==138 && surface.At(48,36)==138
+    assert(surface.At(20,20)==42 && surface.At(36,20)==196 && surface.At(48,36)==196
         && surface.unlocks==beforeLock+1);surface.duringLock={}; // position refreshed after Lock
     Reset();Add();surface.Clean();surface.duringLock=[] {units[1].UnitID=0;};
     beforeLock=surface.unlocks;MoveOrderFeedback::Draw(&surface);
@@ -382,20 +383,20 @@ int main() {
     Reset();Add();surface.Clean();surface.duringLock=[] {megaVisible=true;};
     beforeLock=surface.unlocks;
     MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0 && surface.unlocks==beforeLock+1);surface.duringLock={};
-    MoveOrderFeedback::Draw(&surface);assert(surface.At(12,22)==138); // fresh active view next frame
+    MoveOrderFeedback::Draw(&surface);assert(surface.At(12,22)==196); // fresh active view next frame
     Reset();Add();megaVisible=true;throwProjection=true;surface.Clean();beforeLock=surface.locks;
     MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0 && surface.locks==beforeLock);
     throwProjection=false;surface.duringLock=[] {throwProjection=true;};beforeLock=surface.unlocks;
     MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0 && surface.unlocks==beforeLock+1);surface.duringLock={};
     Reset();Add();megaVisible=true;surface.Clean();MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(12,22)==138 && control.PubCursorX==77 && control.PubCursorY==88);
+    assert(surface.At(12,22)==196 && control.PubCursorX==77 && control.PubCursorY==88);
     Reset();Send(1,Pos(32,16),Pos(96,48));megaVisible=true;
-    surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(8,16)==138 && surface.At(40,32)==138);
+    surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(8,16)==196 && surface.At(40,32)==196);
     units[1].XPos=64;surface.Clean();MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(8,16)==42 && surface.At(24,16)==138 && surface.At(40,32)==138);
+    assert(surface.At(8,16)==42 && surface.At(24,16)==196 && surface.At(40,32)==196);
     Reset();megaVisible=true;
     Send(1,Pos(0,16),Pos(112,16));surface.Clean();MoveOrderFeedback::Draw(&surface);
-    assert(surface.At(8,16)==138 && surface.At(48,16)==138);surface.AssertOutside({8,8,56,40});
+    assert(surface.At(8,16)==196 && surface.At(48,16)==196);surface.AssertOutside({8,8,56,40});
     assert(control.PubCursorX==77 && control.PubCursorY==88);
 #endif
     Reset();for(unsigned i=0;i<capacity+20;++i)Add();

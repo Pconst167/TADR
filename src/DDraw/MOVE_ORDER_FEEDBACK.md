@@ -13,7 +13,7 @@ than when the units eventually reach that part of the queue. Cancelling a
 queued destination removes its matching temporary feedback. Refused commands
 do not create destination feedback.
 
-The green lines/arrows and dark arrow outlines blend at approximately **50%
+The green lines/arrows and dark arrow outlines blend at approximately **80%
 opacity** with the terrain beneath them. A cached palette lookup keeps this
 fast on TA's indexed-color surface. The live palette is checked on each draw,
 and each pixel of a marker is blended only once. The arrow size follows

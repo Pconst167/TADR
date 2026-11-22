@@ -29,9 +29,9 @@ namespace MoveOrderFeedbackGeometry
             for (int background = 0; background < 256; ++background)
             {
                 const Color base = palette[background];
-                const int red = (base.red + target.red + 1) / 2;
-                const int green = (base.green + target.green + 1) / 2;
-                const int blue = (base.blue + target.blue + 1) / 2;
+                const int red = (base.red + 4 * target.red + 2) / 5;
+                const int green = (base.green + 4 * target.green + 2) / 5;
+                const int blue = (base.blue + 4 * target.blue + 2) / 5;
                 int best = (std::numeric_limits<int>::max)(), chosen = 0;
                 for (int index = 0; index < 256; ++index)
                 {
@@ -199,7 +199,7 @@ namespace MoveOrderFeedbackGeometry
         const TriangleMask outer = {outerTip, outerLeft, outerRight};
         const TriangleMask inner = {tip, left, right};
         // Every pixel belongs to the shaft or the arrow, never both. The
-        // outline/fill share one raster pass so 50% opacity is not compounded.
+        // outline/fill share one raster pass so 80% opacity is not compounded.
         Line(s, x0, y0, x1, y1, green, &outer);
         Triangle(s, outerTip, outerLeft, outerRight, 0, &inner);
     }

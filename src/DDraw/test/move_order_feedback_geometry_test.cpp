@@ -45,15 +45,16 @@ static G::Palette TestPalette()
     palette[43] = {80, 80, 80};
     palette[44] = {20, 20, 20};
     palette[45] = {1, 3, 5};
-    palette[1] = {100, 120, 40}; // green over background 42
-    palette[2] = {100, 20, 40};  // black over background 42
-    palette[3] = {40, 140, 40};  // green over background 43
-    palette[4] = {40, 40, 40};   // black over background 43
-    palette[5] = {10, 110, 10};  // green over background 44
-    palette[6] = {10, 10, 10};   // black over background 44
-    palette[7] = {0, 100, 0};   // green over black; black over green
-    palette[8] = {1, 102, 3};   // nearest rounded RGB half, not half an index
-    palette[9] = {1, 2, 3};
+    palette[1] = {40, 168, 16}; // green over background 42
+    palette[2] = {40, 8, 16};  // black over background 42
+    palette[3] = {16, 176, 16};  // green over background 43
+    palette[4] = {16, 16, 16};   // black over background 43
+    palette[5] = {4, 164, 4};  // green over background 44
+    palette[6] = {4, 4, 4};   // black over background 44
+    palette[7] = {0, 160, 0};   // 80% green over black
+    palette[8] = {0, 161, 1};   // rounded 80% RGB blend, not averaged palette indices
+    palette[9] = {0, 1, 1};
+    palette[12] = {0, 40, 0};  // 80% black over green
     return palette;
 }
 
@@ -91,18 +92,18 @@ static void TestPaletteBlending()
             mixed.AssertClip();
         }
     }
-    assert(blend.green[0]==7 && blend.black[234]==7);
+    assert(blend.green[0]==7 && blend.black[234]==12);
     G::Palette nearest;
     nearest.fill({255,0,255}); nearest[0]={0,0,0};
     nearest[234]={0,200,0}; nearest[42]={200,40,80};
-    nearest[10]={99,120,40}; nearest[11]={101,120,40};
+    nearest[10]={39,168,16}; nearest[11]={41,168,16};
     assert(G::MakeBlendTable(nearest).green[42]==10); // deterministic equal-distance tie
-    nearest[10]={98,120,40};
-    assert(G::MakeBlendTable(nearest).green[42]==11); // nearest color without an exact half
+    nearest[10]={38,168,16};
+    assert(G::MakeBlendTable(nearest).green[42]==11); // nearest color without an exact RGB blend
     // A changed live palette must produce a changed RGB lookup, never reuse
     // a numerically averaged palette index.
     auto changed=palette;
-    changed[234]={200,0,200}; changed[10]={200,20,140};
+    changed[234]={200,0,200}; changed[10]={200,8,176};
     const auto replacement=G::MakeBlendTable(changed);
     assert(replacement.green[42]==10 && replacement.green[42]!=blend.green[42]);
 }
