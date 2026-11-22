@@ -18,7 +18,7 @@ palette_read = source.index('bool ReadPalette(')
 palette_try = source.index('{', source.index('__try', palette_read))
 source = (source[:palette_try + 1] + '\nif(throwPaletteRead)throw std::runtime_error("native palette fault");\n'
           + source[palette_try + 1:])
-source = source.replace('Geometry::MakeBlendTable(palette)', 'CountedMakeBlendTable(palette)')
+source = source.replace('Geometry::MakeBlendTable(palette, foreground)', 'CountedMakeBlendTable(palette, foreground)')
 
 
 def braces(text, opening):
@@ -81,9 +81,10 @@ STUBS = r'''
 struct Finally { std::function<void()> cleanup;~Finally(){cleanup();} };
 unsigned blendBuilds=0;
 bool throwPaletteRead=false,throwBlendBuild=false;
-static MoveOrderFeedbackGeometry::BlendTable CountedMakeBlendTable(const MoveOrderFeedbackGeometry::Palette& palette) {
+static MoveOrderFeedbackGeometry::BlendTable CountedMakeBlendTable(const MoveOrderFeedbackGeometry::Palette& palette,
+    unsigned char foreground) {
     ++blendBuilds;if(throwBlendBuild)throw std::runtime_error("palette cache failure");
-    return MoveOrderFeedbackGeometry::MakeBlendTable(palette);
+    return MoveOrderFeedbackGeometry::MakeBlendTable(palette,foreground);
 }
 std::array<unsigned char,0x214+256*4> programMemory={};
 unsigned rendererAttemptLogs=0,recordRejectionLogs=0;
@@ -117,7 +118,7 @@ int scripts[16]={},models[16]={};
 namespace MoveOrderFeedback {
 struct ActorIdentity { short type;unsigned short birthSalt;std::uintptr_t definition,script,model; };
 }
-struct PlayerInfoStruct { unsigned PropertyMask=0; } info[10];
+struct PlayerInfoStruct { unsigned PropertyMask=0;char PlayerLogoColor=0; } info[10];
 struct PlayerStruct {
     PlayerInfoStruct* PlayerInfo=nullptr;
     int My_PlayerType=1; unsigned DirectPlayID=0;
@@ -138,7 +139,10 @@ struct TAdynmemStruct {
 TAdynmemStruct world,otherWorld;
 TAdynmemStruct* worldPtr=&world;TAdynmemStruct** TAmainStruct_PtrPtr=&worldPtr;
 constexpr int TAInGame=3,Player_LocalHuman=1,WATCH=4;
-struct Share { int TAProgress=TAInGame;bool PlayingDemo=false,ehaOff=false; } shared;
+struct Share {
+    int TAProgress=TAInGame;bool PlayingDemo=false,ehaOff=false;
+    int PlayerDotColors[10]={234,212,80,235,108,219,208,93,130,67};
+} shared;
 Share* DataShare=&shared;
 std::uint32_t clockNow=1000;
 unsigned GetTickCount() { return clockNow; }
@@ -230,6 +234,23 @@ static void InvalidActorAfter(const std::function<void()>& change) {
     MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
     units[1]=before;MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0); // permanently suppressed
 }
+static void RGB(unsigned index,unsigned red,unsigned green,unsigned blue) {
+    programMemory[0x214+index*4]=static_cast<unsigned char>(red);
+    programMemory[0x214+index*4+1]=static_cast<unsigned char>(green);
+    programMemory[0x214+index*4+2]=static_cast<unsigned char>(blue);
+}
+static void PlayerPalette() {
+    RGB(227,0,0,255);RGB(212,255,0,0);RGB(219,255,255,0);
+    RGB(200,8,8,212);RGB(201,212,8,8);RGB(202,212,212,8);
+    shared.PlayerDotColors[0]=227;shared.PlayerDotColors[1]=212;shared.PlayerDotColors[2]=219;
+}
+static void LocalPlayer(int player) {
+    world.LocalHumanPlayer_PlayerID=player;
+    for(auto& unit:units)unit.Owner_PlayerPtr0=&world.Players[player];
+}
+static void Unchanged(const TestSurface& surface) {
+    assert(std::count(surface.bytes.begin(),surface.bytes.end(),42)==static_cast<int>(surface.bytes.size()));
+}
 int main() {
     Reset();TestSurface surface;
 #if !DRAWN_MOVE_FORMATIONS_ENABLE
@@ -241,6 +262,52 @@ int main() {
     assert(surface.At(48,36)==196);surface.AssertOutside({8,8,56,40}); // logging failure is harmless
     clockNow=1499;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()>0);
     clockNow=1500;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.Green()==0);
+
+    Reset();PlayerPalette();Add();surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(48,36)==200); // blue player's RGB blended at80%, not fixed green
+    const unsigned blueBuilds=blendBuilds;
+    Reset();PlayerPalette();LocalPlayer(7);info[7].PlayerLogoColor=4;shared.PlayerDotColors[4]=227;
+    Add();surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(48,36)==200 && blendBuilds==blueBuilds); // same color, different local player/slot
+    Reset();PlayerPalette();Add();surface.Clean();MoveOrderFeedback::Draw(&surface);
+    const unsigned beforeColors=blendBuilds;
+    info[0].PlayerLogoColor=1;surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(48,36)==201 && blendBuilds==beforeColors+1); // red
+    info[0].PlayerLogoColor=2;surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(48,36)==202 && blendBuilds==beforeColors+2); // yellow
+    shared.PlayerDotColors[2]=212;surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(48,36)==201 && blendBuilds==beforeColors+3); // mapping changed, palette unchanged
+    surface.Clean();MoveOrderFeedback::Draw(&surface);assert(blendBuilds==beforeColors+3);
+    clockNow=1499;units[1].XPos=28;surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(36,20)==201 && surface.At(48,36)==201);
+    clockNow=1500;surface.Clean();MoveOrderFeedback::Draw(&surface);Unchanged(surface); // original timer retained
+
+    Reset();PlayerPalette();Add();surface.Clean();surface.duringLock=[]{info[0].PlayerLogoColor=1;};
+    int colorUnlocks=surface.unlocks;MoveOrderFeedback::Draw(&surface);Unchanged(surface);
+    assert(surface.unlocks==colorUnlocks+1);surface.duringLock={};
+    MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==201);
+    Reset();PlayerPalette();Add();surface.Clean();surface.duringLock=[]{shared.PlayerDotColors[0]=219;};
+    colorUnlocks=surface.unlocks;MoveOrderFeedback::Draw(&surface);Unchanged(surface);
+    assert(surface.unlocks==colorUnlocks+1);surface.duringLock={};
+    MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==202);
+    for(int invalid:{-1,10,127}) {
+        Reset();Add();info[0].PlayerLogoColor=static_cast<char>(invalid);surface.Clean();const int locks=surface.locks;
+        MoveOrderFeedback::Draw(&surface);Unchanged(surface);assert(surface.locks==locks);
+        info[0].PlayerLogoColor=0;MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==196);
+    }
+    for(int invalid:{-1,256,1000}) {
+        Reset();Add();shared.PlayerDotColors[0]=invalid;surface.Clean();const int locks=surface.locks;
+        MoveOrderFeedback::Draw(&surface);Unchanged(surface);assert(surface.locks==locks);
+        shared.PlayerDotColors[0]=234;MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==196);
+    }
+    Reset();Add();shared.PlayerDotColors[0]=0;surface.Clean();MoveOrderFeedback::Draw(&surface);
+    assert(surface.At(48,36)==8); // palette index0 is valid foreground, not a sentinel
+    shared.PlayerDotColors[0]=255;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(48,36)==212);
+#if USEMEGAMAP
+    Reset();PlayerPalette();LocalPlayer(6);info[6].PlayerLogoColor=1;Add();megaVisible=true;
+    surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(12,22)==201);
+    info[6].PlayerLogoColor=2;surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(12,22)==202);
+#endif
 
     Reset();Add();surface.Clean();MoveOrderFeedback::Draw(&surface);assert(surface.At(20,20)==196);
     units[1].XPos=28;surface.Clean();MoveOrderFeedback::Draw(&surface);

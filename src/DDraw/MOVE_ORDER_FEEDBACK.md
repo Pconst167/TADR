@@ -1,6 +1,6 @@
 # Move order destination feedback
 
-An accepted move command briefly shows a green line and a green arrow at each
+An accepted move command briefly shows a player-coloured line and arrow at each
 unit's destination. Each line follows its unit as it moves while its destination
 arrow stays fixed. The feedback lasts **0.5 seconds** from the command, including
 while the game is paused, and appears on both the battlefield and megamap
@@ -13,12 +13,14 @@ than when the units eventually reach that part of the queue. Cancelling a
 queued destination removes its matching temporary feedback. Refused commands
 do not create destination feedback.
 
-The green lines/arrows and dark arrow outlines blend at approximately **80%
+The player-coloured lines/arrows and dark arrow outlines blend at approximately **80%
 opacity** with the terrain beneath them. A cached palette lookup keeps this
 fast on TA's indexed-color surface. The live palette is checked on each draw,
 and each pixel of a marker is blended only once. The arrow size follows
-the current view: larger on the battlefield and smaller on the megamap. Lines
-and arrows are clipped to the map view and kept out of native popup panels.
+the current view: larger on the battlefield and smaller on the megamap. The
+colour follows the player's current in-game colour through the same palette
+mapping as unit markers. Lines and arrows are clipped to the map view and kept
+out of native popup panels.
 
 ## Build and runtime behavior
 

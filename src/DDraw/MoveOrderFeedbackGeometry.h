@@ -17,15 +17,15 @@ namespace MoveOrderFeedbackGeometry
     using Palette = std::array<Color, 256>;
     struct BlendTable
     {
-        std::array<unsigned char, 256> green, black;
+        std::array<unsigned char, 256> ink, black;
     };
-    inline BlendTable MakeBlendTable(const Palette& palette)
+    inline BlendTable MakeBlendTable(const Palette& palette, unsigned char foreground = 234)
     {
         BlendTable table = {};
         for (int layer = 0; layer < 2; ++layer)
         {
-            const Color target = palette[layer == 0 ? 234 : 0];
-            auto& row = layer == 0 ? table.green : table.black;
+            const Color target = palette[layer == 0 ? foreground : 0];
+            auto& row = layer == 0 ? table.ink : table.black;
             for (int background = 0; background < 256; ++background)
             {
                 const Color base = palette[background];
@@ -68,7 +68,9 @@ namespace MoveOrderFeedbackGeometry
             && Contains(s.clip, x, y) && !Contains(s.excluded, x, y))
         {
             auto& pixel = s.pixels[static_cast<std::size_t>(y) * s.pitch + x];
-            if (s.blend && color == 234) pixel = s.blend->green[pixel];
+            // 234 is the foreground role, not a fixed green RGB when a table
+            // is provided. The caller chooses its actual palette entry, even 0.
+            if (s.blend && color == 234) pixel = s.blend->ink[pixel];
             else if (s.blend && color == 0) pixel = s.blend->black[pixel];
             else pixel = color;
         }
@@ -181,13 +183,13 @@ namespace MoveOrderFeedbackGeometry
     inline void Draw(const Surface& s, int x0, int y0, int x1, int y1, bool megamap)
     {
         if (!Valid(s)) return;
-        constexpr unsigned char green = 234;
+        constexpr unsigned char inkRole = 234;
         double dx = static_cast<double>(x1) - x0, dy = static_cast<double>(y1) - y0;
         const double length = std::sqrt(dx * dx + dy * dy);
         if (length > 0.0) { dx /= length; dy /= length; }
         else { dx = 0.0; dy = -1.0; }
         const double size = megamap ? 4.0 : 8.0, width = megamap ? 2.5 : 4.5;
-        // A black outline keeps the green destination readable on light terrain.
+        // A black outline keeps the destination ink readable on light terrain.
         const Point outerTip = {x1 + dx, y1 + dy};
         const Point outerLeft = {x1 - dx * (size + 1) - dy * (width + 1),
             y1 - dy * (size + 1) + dx * (width + 1)};
@@ -200,7 +202,7 @@ namespace MoveOrderFeedbackGeometry
         const TriangleMask inner = {tip, left, right};
         // Every pixel belongs to the shaft or the arrow, never both. The
         // outline/fill share one raster pass so 80% opacity is not compounded.
-        Line(s, x0, y0, x1, y1, green, &outer);
+        Line(s, x0, y0, x1, y1, inkRole, &outer);
         Triangle(s, outerTip, outerLeft, outerRight, 0, &inner);
     }
 }

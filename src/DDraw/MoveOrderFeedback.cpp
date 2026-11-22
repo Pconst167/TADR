@@ -136,17 +136,19 @@ namespace
                 return false;
         return true;
     }
-    Geometry::BlendTable PaletteBlend(const Geometry::Palette& palette)
+    Geometry::BlendTable PaletteBlend(const Geometry::Palette& palette, unsigned char foreground)
     {
         static std::mutex paletteMutex;
         static Geometry::Palette cachedPalette = {};
         static Geometry::BlendTable cachedBlend = {};
+        static unsigned char cachedForeground = 0;
         static bool ready = false;
         std::lock_guard<std::mutex> lock(paletteMutex);
-        if (!ready || !SamePalette(cachedPalette, palette))
+        if (!ready || cachedForeground != foreground || !SamePalette(cachedPalette, palette))
         {
-            cachedBlend = Geometry::MakeBlendTable(palette);
+            cachedBlend = Geometry::MakeBlendTable(palette, foreground);
             cachedPalette = palette;
+            cachedForeground = foreground;
             ready = true;
         }
         // Rendering receives an immutable copy, so no cache mutex crosses a
@@ -211,6 +213,8 @@ namespace
         UnitStruct* ownerFirst = nullptr;
         UnitStruct* ownerLast = nullptr;
         int player = -1;
+        int logoColor = -1;
+        unsigned char paletteColor = 0;
         unsigned dpid = 0;
         bool megamap = false;
 #if USEMEGAMAP
@@ -250,6 +254,11 @@ namespace
             out.world = ta; out.viewport = ta->GameSreen_Rect;
             out.first = ta->BeginUnitsArray_p; out.last = ta->EndOfUnitsArray_p;
             out.player = ta->LocalHumanPlayer_PlayerID;
+            out.logoColor = static_cast<unsigned char>(ta->Players[out.player].PlayerInfo->PlayerLogoColor);
+            if (out.logoColor >= 10) return false;
+            const int color = DataShare->PlayerDotColors[out.logoColor];
+            if (color < 0 || color > 255) return false;
+            out.paletteColor = static_cast<unsigned char>(color);
             out.ownerFirst = ta->Players[out.player].Units;
             out.ownerLast = ta->Players[out.player].UnitsAry_End;
             out.dpid = ta->Players[out.player].DirectPlayID;
@@ -368,7 +377,8 @@ namespace
         }
         Scene after = {};
         if (!ReadScene(before.world, after)) return false;
-        if (before.megamap != after.megamap || before.cameraX != after.cameraX
+        if (before.logoColor != after.logoColor || before.paletteColor != after.paletteColor
+            || before.megamap != after.megamap || before.cameraX != after.cameraX
             || before.cameraY != after.cameraY || before.mapWidth != after.mapWidth
             || before.mapHeight != after.mapHeight || !SameRect(before.clip, after.clip)
             || !SameRect(before.excluded, after.excluded)) return false;
@@ -543,7 +553,7 @@ namespace MoveOrderFeedback
             return;
         }
         Geometry::BlendTable blend = {};
-        try { blend = PaletteBlend(palette); }
+        try { blend = PaletteBlend(palette, scene.paletteColor); }
         catch (...)
         {
             LogRender(diagnostic, "palette-cache-fault", static_cast<unsigned>(snapshot.size()),

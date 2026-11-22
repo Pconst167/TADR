@@ -350,7 +350,7 @@ namespace MoveOrderFeedback
             catch (...) { return; }
         }
         installed = true;
-        IDDrawSurface::OutptTxt("[MoveOrderFeedback] build=destinations-v5");
+        IDDrawSurface::OutptTxt("[MoveOrderFeedback] build=destinations-v6");
     }
 }
 #else

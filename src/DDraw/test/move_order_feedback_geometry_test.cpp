@@ -66,7 +66,7 @@ static void TestPaletteBlending()
     {
         const int green = background==42 ? 1 : background==43 ? 3 : background==44 ? 5 : 8;
         const int black = background==42 ? 2 : background==43 ? 4 : background==44 ? 6 : 9;
-        assert(blend.green[background]==green && blend.black[background]==black);
+        assert(blend.ink[background]==green && blend.black[background]==black);
         for (bool megamap : {false,true})
         {
             Canvas opaque, mixed;
@@ -92,20 +92,50 @@ static void TestPaletteBlending()
             mixed.AssertClip();
         }
     }
-    assert(blend.green[0]==7 && blend.black[234]==12);
+    assert(blend.ink[0]==7 && blend.black[234]==12);
     G::Palette nearest;
     nearest.fill({255,0,255}); nearest[0]={0,0,0};
     nearest[234]={0,200,0}; nearest[42]={200,40,80};
     nearest[10]={39,168,16}; nearest[11]={41,168,16};
-    assert(G::MakeBlendTable(nearest).green[42]==10); // deterministic equal-distance tie
+    assert(G::MakeBlendTable(nearest).ink[42]==10); // deterministic equal-distance tie
     nearest[10]={38,168,16};
-    assert(G::MakeBlendTable(nearest).green[42]==11); // nearest color without an exact RGB blend
+    assert(G::MakeBlendTable(nearest).ink[42]==11); // nearest color without an exact RGB blend
     // A changed live palette must produce a changed RGB lookup, never reuse
     // a numerically averaged palette index.
     auto changed=palette;
     changed[234]={200,0,200}; changed[10]={200,8,176};
     const auto replacement=G::MakeBlendTable(changed);
-    assert(replacement.green[42]==10 && replacement.green[42]!=blend.green[42]);
+    assert(replacement.ink[42]==10 && replacement.ink[42]!=blend.ink[42]);
+}
+
+static void TestSelectedPlayerColors()
+{
+    auto palette=TestPalette();
+    palette[200]={200,0,200}; palette[10]={200,8,176};
+    palette[255]={240,200,40}; palette[11]={232,168,48};
+    // These expected RGB colors are independent 80% mixtures over the same
+    // terrain. Entry 0 is a valid player ink, rather than a transparent sentinel.
+    for (int foreground : {0,234,200,255})
+    {
+        const int expected=foreground==0 ? 2 : foreground==234 ? 1 : foreground==200 ? 10 : 11;
+        const auto blend=G::MakeBlendTable(palette,static_cast<unsigned char>(foreground));
+        assert(blend.ink[42]==expected && blend.black[42]==2);
+        for (bool megamap : {false,true})
+        {
+            Canvas roles, colored;
+            colored.surface.blend=&blend;
+            colored.surface.excluded=roles.surface.excluded={24,12,32,20};
+            G::Draw(roles.surface,10,24,48,24,megamap);
+            G::Draw(colored.surface,10,24,48,24,megamap);
+            assert(colored.At(48,24)==expected && colored.At(16,24)==expected);
+            for (int y=0;y<Canvas::height;++y) for (int x=0;x<Canvas::pitch;++x)
+                assert(colored.At(x,y)==(roles.At(x,y)==234 ? expected : roles.At(x,y)==0 ? 2 : 42));
+            colored.AssertClip();
+        }
+        Canvas primitive;
+        G::Line(primitive.surface,10,24,48,24,234);
+        assert(primitive.At(16,24)==234); // no table keeps legacy opaque primitives
+    }
 }
 
 static void TestOneCompositePerCommand()
@@ -113,7 +143,7 @@ static void TestOneCompositePerCommand()
     // Every write advances the background index once. This exposes repeated
     // outline/fill/endpoint/shaft writes regardless of the chosen color.
     G::BlendTable counter = {};
-    for (int i=0;i<256;++i) counter.green[i]=counter.black[i]=static_cast<unsigned char>(i+1);
+    for (int i=0;i<256;++i) counter.ink[i]=counter.black[i]=static_cast<unsigned char>(i+1);
     for (bool megamap : {false,true})
         for (int dx : {-16,0,16}) for (int dy : {-12,0,12})
         {
@@ -140,6 +170,7 @@ static void TestOneCompositePerCommand()
 int main()
 {
     TestPaletteBlending();
+    TestSelectedPlayerColors();
     TestOneCompositePerCommand();
     {
         Canvas c;
