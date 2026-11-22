@@ -1,0 +1,98 @@
+name: Test move order destination feedback
+on:
+  push:
+    branches: ['feature/move-order-feedback-test']
+  pull_request:
+    paths:
+      - '.github/workflows/move-order-feedback-test.yml'
+      - 'src/DDraw/**'
+permissions:
+  contents: read
+jobs:
+  behavior:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Destination feedback geometry, lifecycle and native capture
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/move_order_feedback_geometry_test.cpp -o /tmp/move-feedback-geometry
+          /tmp/move-feedback-geometry
+          python3 src/DDraw/test/move_order_feedback_controller_test.py
+          python3 src/DDraw/test/move_order_feedback_capture_test.py
+      - name: Existing formations and native queue prepending
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/drawn_move_geometry_test.cpp -o /tmp/drawn-move-geometry
+          /tmp/drawn-move-geometry
+          python3 src/DDraw/test/drawn_move_input_test.py --mod ESCALATION
+          python3 src/DDraw/test/drawn_move_input_test.py --mod PROTA
+          python3 src/DDraw/test/drawn_move_input_test.py --mod OTA
+          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/prepend_queue_test.cpp -o /tmp/prepend-queue
+          /tmp/prepend-queue
+          python3 src/DDraw/test/prepend_orders_adapter_test.py
+      - name: Existing grid and extractor controls
+        run: |
+          python3 src/DDraw/test/optional_unit_controls_test.py
+          python3 src/DDraw/test/grid_building_switch_test.py
+          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/build_rectangle_geometry_test.cpp -o /tmp/build-rectangle-geometry
+          /tmp/build-rectangle-geometry
+          python3 src/DDraw/test/build_rectangle_gesture_test.py
+          python3 src/DDraw/test/build_rectangle_input_test.py
+          python3 src/DDraw/test/mex_upgrade_test.py
+          python3 src/DDraw/test/mex_upgrade_menu_io_test.py
+      - name: Existing allied cursor protocol and rendering
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/allied_cursor_protocol_test.cpp -o /tmp/allied-cursor-protocol
+          /tmp/allied-cursor-protocol
+          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/allied_cursor_geometry_test.cpp -o /tmp/allied-cursor-geometry
+          /tmp/allied-cursor-geometry
+          python3 src/DDraw/test/allied_cursor_draw_test.py
+          python3 src/DDraw/test/allied_cursor_controller_test.py
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: escalation, mod: ESCALATION, formations: 1, prepend: 1, mex: 1, grid: 1, cursors: 1, override_formations: false}
+          - {name: prota, mod: PROTA, formations: 1, prepend: 1, mex: 0, grid: 1, cursors: 0, override_formations: false}
+          - {name: escalation-prepend-off, mod: ESCALATION, formations: 1, prepend: 0, mex: 1, grid: 1, cursors: 1, override_formations: false}
+          - {name: escalation-formations-off, mod: ESCALATION, formations: 0, prepend: 1, mex: 1, grid: 1, cursors: 1, override_formations: true}
+          - {name: ota-disabled, mod: OTA, formations: 0, prepend: 0, mex: 0, grid: 0, cursors: 0, override_formations: false}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_x86
+      - name: Compile the selected mod and feature combination
+        shell: pwsh
+        run: |
+          if ('${{ matrix.name }}' -eq 'escalation-prepend-off') {
+            python -c "from pathlib import Path; p=Path('src/DDraw/config_escalation.h'); b=p.read_bytes(); old=b'#define PREPEND_ORDERS_ENABLE 1'; assert b.count(old)==1; p.write_bytes(b.replace(old,b'#define PREPEND_ORDERS_ENABLE 0'))"
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to select disabled prepend profile' }
+          }
+          $buildArgs = @('src/DDraw/ddraw.vcxproj', '/p:Configuration=ReleasePublic', '/p:Platform=Win32', '/p:TDRAW_CONFIG=TDRAW_CONFIG_${{ matrix.mod }}')
+          if ('${{ matrix.override_formations }}' -eq 'true') {
+            $buildArgs += '/p:DRAWN_MOVE_FORMATIONS_ENABLE=${{ matrix.formations }}'
+          }
+          & msbuild @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Verify feedback and the existing feature selections
+        shell: pwsh
+        run: |
+          python src/DDraw/test/verify_move_order_feedback.py src/DDraw/Public/tdraw.dll --enabled ${{ matrix.formations }}
+          if ($LASTEXITCODE -ne 0) { throw 'Move feedback verification failed' }
+          python src/DDraw/test/verify_optional_unit_controls.py src/DDraw/Public/tdraw.dll --formations ${{ matrix.formations }} --mex ${{ matrix.mex }} --grid ${{ matrix.grid }}
+          if ($LASTEXITCODE -ne 0) { throw 'Optional unit controls verification failed' }
+          python src/DDraw/test/verify_prepend_orders.py src/DDraw/Public/tdraw.dll --enabled ${{ matrix.prepend }}
+          if ($LASTEXITCODE -ne 0) { throw 'Prepend feature verification failed' }
+          python src/DDraw/test/verify_allied_cursors.py src/DDraw/Public/tdraw.dll --enabled ${{ matrix.cursors }}
+          if ($LASTEXITCODE -ne 0) { throw 'Allied cursor verification failed' }
+          python src/DDraw/tools/check_win7_imports.py src/DDraw/Public/tdraw.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Windows 7 import verification failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: move-feedback-${{ matrix.name }}
+          path: |
+            src/DDraw/Public/tdraw.dll
+            src/DDraw/Public/tdraw.pdb
+            src/DDraw/Public/tdraw.map

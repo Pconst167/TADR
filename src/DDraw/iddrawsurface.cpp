@@ -27,6 +27,7 @@ using namespace std;
 #include "VoteDialog.h"
 #include "tahook.h"
 #include "DrawnMove.h"
+#include "MoveOrderFeedback.h"
 #include "PrependOrders.h"
 #include "AlliedCursors.h"
 #include "AlliedCursorDraw.h"
@@ -755,6 +756,10 @@ HRESULT __stdcall IDDrawSurface::Unlock(LPVOID arg1)
 
 #endif
 
+#if DRAWN_MOVE_FORMATIONS_ENABLE
+            { PROFILE_SCOPE("Unlock.MoveOrderFeedback"); MoveOrderFeedback::Draw(lpBack); }
+#endif
+
 #if ALLIED_CURSORS_ENABLE
             {
                 // The megamap replaces the game-area pixels in Blit above.
@@ -928,6 +933,10 @@ HRESULT __stdcall IDDrawSurface::Unlock(LPVOID arg1)
 				PROFILE_SCOPE("Unlock.Minimap_Blit");
 				GUIExpander->myMinimap->Blit ( lpBack);
 			}
+#endif
+
+#if DRAWN_MOVE_FORMATIONS_ENABLE
+            { PROFILE_SCOPE("Unlock.MoveOrderFeedback"); MoveOrderFeedback::Draw(lpBack); }
 #endif
 
 #if ALLIED_CURSORS_ENABLE

@@ -1,5 +1,8 @@
 #include "config.h"
 #include "PrependOrders.h"
+#if DRAWN_MOVE_FORMATIONS_ENABLE
+#include "MoveOrderFeedback.h"
+#endif
 #if PREPEND_ORDERS_ENABLE
 #include "oddraw.h"
 #include "tamem.h"
@@ -450,7 +453,12 @@ namespace PrependOrders
             for (CallSite& site : sites)
             {
                 site.patch[0] = 0xE8;
-                const std::int32_t relative = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(&Dispatch)-site.address-5);
+                std::uintptr_t target = reinterpret_cast<std::uintptr_t>(&Dispatch);
+#if DRAWN_MOVE_FORMATIONS_ENABLE
+                if (site.address == 0x0048D1F4u)
+                    target = reinterpret_cast<std::uintptr_t>(&MoveOrderFeedback::Dispatch);
+#endif
+                const std::int32_t relative = static_cast<std::int32_t>(target-site.address-5);
                 std::memcpy(site.patch+1, &relative, sizeof(relative));
                 hooks.emplace_back(new SingleHook(site.address, 5, INLINE_UNPROTECTEVINMENT, site.patch));
                 if (!CodeMatches(site.address, site.patch)) { hooks.clear(); return; }

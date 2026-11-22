@@ -25,6 +25,7 @@ using namespace std;
 #include "fullscreenminimap.h"
 #include "GUIExpand.h"
 #include "DrawnMove.h"
+#include "MoveOrderFeedback.h"
 #include "PrependOrders.h"
 #include "StartPositions.h"
 #include "AutoTeam.h"
@@ -229,6 +230,7 @@ bool APIENTRY DllMain(HINSTANCE hinst, unsigned long reason, void*)
 
 		FixTABug= new TABugFixing;
 		PrependOrders::Install();
+		MoveOrderFeedback::Install();
 		InstallCrashTrace();
 		EngineLimits::Install();
 
