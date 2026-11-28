@@ -1,3 +1,6 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "config.h"
 #include "UnitStatsPanel.h"
 

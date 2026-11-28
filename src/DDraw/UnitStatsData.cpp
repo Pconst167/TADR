@@ -1,9 +1,13 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "config.h"
 #include "UnitStatsData.h"
 
 #if UNIT_STATS_PANEL_ENABLE
 #include "oddraw.h"
 #include "tamem.h"
+#include "iddrawsurface.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
