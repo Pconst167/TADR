@@ -458,6 +458,8 @@ if NOT "$(LocalDebuggerWorkingDirectory)" == "$(ProjectDir)" if exist "$(LocalDe
     <ClCompile Include="TenPlayerReplay.cpp" />
     <ClCompile Include="TPacket.cpp" />
     <ClCompile Include="UnitIcon.cpp" />
+    <ClCompile Include="LabBuildCycles.cpp" />
+    <ClCompile Include="LabBuildCycleMenu.cpp" />
     <ClCompile Include="ddraw.cpp">
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -596,6 +598,9 @@ if NOT "$(LocalDebuggerWorkingDirectory)" == "$(ProjectDir)" if exist "$(LocalDe
     <ClInclude Include="cincome.h" />
     <ClInclude Include="commanderwarp.h" />
     <ClInclude Include="ddraw.h" />
+    <ClInclude Include="LabBuildCycles.h" />
+    <ClInclude Include="LabBuildCycleMenu.h" />
+    <ClInclude Include="LabBuildCycleArt.h" />
     <ClInclude Include="Dialog.h" />
     <ClInclude Include="ElementHandler.h" />
     <ClInclude Include="ExternQuickKey.h" />

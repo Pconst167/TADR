@@ -228,3 +228,6 @@
 
 // Five-colour unit health bar; see HealthBarColors.h.
 #define HEALTH_BAR_COLORS_ENABLE 1
+
+// Optional native factory queue repeat button; starts off for each lab.
+#define LAB_BUILD_CYCLES_ENABLE 1
