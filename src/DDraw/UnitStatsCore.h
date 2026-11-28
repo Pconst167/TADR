@@ -43,7 +43,8 @@ namespace UnitStatsCore
 
     inline double Speed(std::uint32_t raw)
     {
-        return static_cast<double>(raw) * 30.0 / 65536.0;
+        // Match TA's native unit-help conversion: 30 ticks/s, 0.4 metres/pixel.
+        return static_cast<double>(raw) * 30.0 * 0.4 / 65536.0;
     }
 
     // The burst projectile is a carrier that spawns exactly burst children.
@@ -79,6 +80,18 @@ namespace UnitStatsCore
                 if (!result.empty() && result.back() == '.') result.pop_back();
             }
             return result;
+        }
+
+        inline std::string SpeedNumber(double value)
+        {
+            if (!std::isfinite(value) || value < 0) return "?";
+            // Native MakePropList uses %.1f even for speeds below 10 m/s.
+            // Retain bounded output for values outside the native raw-speed range.
+            if (value >= 1000000000.0) return Number(value);
+            std::ostringstream stream;
+            stream.imbue(std::locale::classic());
+            stream << std::fixed << std::setprecision(1) << value;
+            return stream.str();
         }
 
         inline std::string Name(const std::string& source)
@@ -190,7 +203,7 @@ namespace UnitStatsCore
         if (air.present) fields.push_back("AA DPS~ " + air.Format());
         if (water.present) fields.push_back("Water DPS~ " + water.Format());
         if (range > 0) fields.push_back("Range " + std::to_string(range) + (mixedRanges ? " max" : ""));
-        Detail::Nonzero(fields, "Speed ", stats.speed);
+        if (stats.speed != 0) fields.push_back("Speed " + Detail::SpeedNumber(stats.speed) + " m/s");
         fields.push_back("LOS " + std::to_string(stats.los));
         if (paralysis.present) fields.push_back("Para/s~ " + paralysis.Format());
         for (const std::string& entry : special)

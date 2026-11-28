@@ -51,7 +51,16 @@ template<class T> struct NativePtr {
 
 struct WeaponStruct {
     char WeaponName[32] = {};
-    unsigned char remaining[0x115 - 32] = {};
+    unsigned char toDamage[0xD4 - 32] = {};
+    std::uint16_t defaultDamage = 0, areaOfEffect = 0;
+    unsigned char toRange[4] = {};
+    std::int32_t range = 0;
+    unsigned char toReload[4] = {};
+    std::uint16_t reloadTicks = 0;
+    unsigned char toBurst[4] = {};
+    std::uint16_t burst = 0, burstRateTicks = 0;
+    unsigned char toFlags[0x111 - 0xEE] = {};
+    std::uint32_t flags = 0;
 };
 struct UnitDefStruct {
     char Name[32] = {};
@@ -97,6 +106,12 @@ static_assert(sizeof(UnitStruct) == 0x118, "Win32 live-unit stride");
 static_assert(offsetof(UnitStruct, UnitType) == 0x92, "Unit type pointer offset");
 static_assert(offsetof(UnitStruct, UnitSelected) == 0x110, "Live/selection flags offset");
 static_assert(sizeof(WeaponStruct) == 0x115, "Native weapon stride");
+static_assert(offsetof(WeaponStruct, defaultDamage) == 0xD4, "Native damage offset");
+static_assert(offsetof(WeaponStruct, range) == 0xDC, "Native range offset");
+static_assert(offsetof(WeaponStruct, reloadTicks) == 0xE4, "Native reload offset");
+static_assert(offsetof(WeaponStruct, burst) == 0xEA, "Native burst offset");
+static_assert(offsetof(WeaponStruct, burstRateTicks) == 0xEC, "Native burst-rate offset");
+static_assert(offsetof(WeaponStruct, flags) == 0x111, "Native weapon flags offset");
 
 struct TAdynmemStruct {
     UnitDefStruct* UnitDef = nullptr;
@@ -105,6 +120,7 @@ struct TAdynmemStruct {
     UnitStruct* EndOfUnitsArray_p = nullptr;
     int LocalHumanPlayer_PlayerID = 0;
     PlayerStruct Players[10] = {};
+    WeaponStruct Weapons[256] = {};
 };
 struct Share { int TAProgress = 7; } share;
 Share* DataShare = &share;
@@ -176,7 +192,7 @@ void LoadedDefinitionsAndNativeWidths() {
     assert(stats.name == "Loaded mod unit" && stats.count == 1);
     assert(stats.maxHealth == 100000 && stats.currentHealth == 100000 && !stats.liveHealth);
     assert(stats.metalCost == 42.5 && stats.energyCost == 123.25);
-    assert(stats.speed == 45 && stats.los == 375);
+    assert(stats.speed == 18 && stats.los == 375);
     assert(stats.radar == 1200 && stats.sonar == 600);
     assert(stats.radarJam == 180 && stats.sonarJam == 160);
     assert(stats.buildPower == 91 && stats.buildRange == 222 && stats.buildWork == 12000);
@@ -301,12 +317,57 @@ void FreshModsGamesAndWeaponSlots() {
     assert(world.Read(next) && next.maxHealth == 100);
 }
 
+void ArchiveFlashAndNamedNoWeaponSlots() {
+    World world; UnitStatsCore::Stats stats;
+    auto& def = world.defs[2];
+    // Actual ESC TAESC.gp3: unitsE/ARMFLASH.fbi, weaponE/TAESC.tdf.
+    // ProTA.gp3: units/ARMFLASH.FBI, weaponP/WEAPONS.TDF use the same
+    // EMG damage=8, burst=3, reloadtime=.4 and named NOWEAPON ID=0.
+    // Populate named fields in the independently declared native weapon layout;
+    // missing slots use table entry zero, as TA's unit loader does.
+    auto& noWeapon = world.ta.Weapons[0];
+    std::memcpy(noWeapon.WeaponName, "NOWEAPON", 9);
+    noWeapon.range = 16;
+    auto& emg = world.ta.Weapons[43];
+    std::memcpy(emg.WeaponName, "EMG", 4);
+    emg.defaultDamage = 8; emg.areaOfEffect = 16; emg.range = 180;
+    emg.reloadTicks = 12; emg.burst = 3; emg.burstRateTicks = 3;
+    def.lRawSpeed_maxvelocity = 140902; // trunc(2.15 * 65536)
+    def.weapon1 = &emg; def.weapon2 = &noWeapon; def.weapon3 = &noWeapon;
+    const auto before = world.Image();
+    assert(world.Read(stats));
+    auto fields = UnitStatsCore::Fields(stats);
+    auto has = [&fields](const std::string& field) {
+        return std::find(fields.begin(), fields.end(), field) != fields.end();
+    };
+    assert(has("DPS~ 60") && has("Speed 25.8 m/s") && has("Reload 0.4s"));
+    assert(stats.weapons[1].range == 0 && stats.weapons[2].range == 0);
+    assert(world.Image() == before);
+
+    // ProTA's Flash is MaxVelocity=2.0 and uses EMG table slot 16.
+    world.ta.Weapons[16] = emg;
+    def.weapon1 = &world.ta.Weapons[16]; def.lRawSpeed_maxvelocity = 131072;
+    assert(world.Read(stats)); fields = UnitStatsCore::Fields(stats);
+    assert(has("DPS~ 60") && has("Speed 24.0 m/s"));
+
+    def.weapon1 = &noWeapon;
+    assert(world.Read(stats)); fields = UnitStatsCore::Fields(stats);
+    assert(has("DPS 0") && !has("Range 16"));
+
+    // A distinct definition with the same values is not the sentinel. Do not
+    // turn a legitimate zero-reload weapon's unknown rate into a guessed zero.
+    world.weapons[1] = noWeapon;
+    def.weapon1 = &world.weapons[1];
+    assert(world.Read(stats)); fields = UnitStatsCore::Fields(stats);
+    assert(has("DPS~ ?") && has("Range 16"));
+}
+
 int main() {
 #if TEST_ENABLED
     LoadedDefinitionsAndNativeWidths(); OwnedSelectionHealthAndEconomy();
     MatchingGroupsRemainPerUnit(); InvalidSelectedUnitsUseOnlyDefinition();
     InvalidContextsDoNotPublishPartialStats(); SanitizedNumbersAndBoundedNames();
-    FreshModsGamesAndWeaponSlots();
+    FreshModsGamesAndWeaponSlots(); ArchiveFlashAndNamedNoWeaponSlots();
     std::cout << "Unit stats production adapter: native widths, owned/live selection, groups, mod reload, readonly data and malformed values passed\n";
 #else
     UnitStatsCore::Stats stats; stats.name = "unchanged";

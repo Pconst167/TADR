@@ -39,18 +39,21 @@ def adapted_source():
     assert text.count(native) == 1
     text = text.replace(native, 'NativeDraw const DrawNative = &FakeNativeDraw;')
     # Preserve the actual production cleanup statements, including return paths.
-    start = text.index('bool PaintRestored(')
-    end_signature = text.index('bool PaintSafe(', start)
-    method = text[start:end_signature]
-    try_at = method.index('__try')
-    try_open = method.index('{', try_at)
-    try_body, try_end = block(method, try_open)
-    finally_at = method.index('__finally', try_end)
-    finally_open = method.index('{', finally_at)
-    finally_body, finally_end = block(method, finally_open)
-    adapted = method[:try_at] + 'auto restoration = OnExit([&]() {' + finally_body + '});\n'
-    adapted += '{' + try_body + '}' + method[finally_end:]
-    text = text[:start] + adapted + text[end_signature:]
+    for signature, following in (
+            ('void DrawNativeSelected(', 'struct FontState'),
+            ('bool PaintRestored(', 'bool PaintSafe(')):
+        start = text.index(signature)
+        end_signature = text.index(following, start)
+        method = text[start:end_signature]
+        try_at = method.index('__try')
+        try_open = method.index('{', try_at)
+        try_body, try_end = block(method, try_open)
+        finally_at = method.index('__finally', try_end)
+        finally_open = method.index('{', finally_at)
+        finally_body, finally_end = block(method, finally_open)
+        adapted = method[:try_at] + 'auto restoration = OnExit([&]() {' + finally_body + '});\n'
+        adapted += '{' + try_body + '}' + method[finally_end:]
+        text = text[:start] + adapted + text[end_signature:]
     text = text.replace('__try', 'try')
     text = text.replace('__except (EXCEPTION_EXECUTE_HANDLER)', 'catch (...)')
     assert '__try' not in text and '__finally' not in text and '__except' not in text
@@ -112,6 +115,7 @@ struct TAdynmemStruct {
     int LocalHumanPlayer_PlayerID=0; PlayerStruct Players[10];
     UnitStruct* BeginUnitsArray_p=nullptr; UnitStruct* EndOfUnitsArray_p=nullptr;
     unsigned GameStateMask=0; Desktop desktopGUI; POINT CurtMousePostion;
+    unsigned short MouseOverUnit=0,MouseOverFeature=0xffff;
     RaceSide RaceSideDataAry[5]; unsigned ScreenWidth=0,ScreenHeight=0;
     unsigned char nativePadding[0x40000]={};
 };
@@ -152,6 +156,11 @@ bool dataFail=false,dataThrow=false,paintThrow=false,nativeThrow=false;
 bool readFail=false,patchFail=false,constructorThrow=false;
 unsigned readCalls=0,failReadNumber=0;
 std::vector<unsigned short> nativeCacheValues;
+std::vector<unsigned char> nativePixels;
+int nativeExtent=310,lastNativeExtent=310;
+unsigned short nativeObservedUnit=0;
+int nativeObservedButton=-1;
+bool nativeHonorsCache=false,texturedBackground=false;
 std::array<UnitStatsCore::Stats,4> templates;
 const std::array<unsigned char,5> Original={{0xE8,0x46,0x12,0,0}};
 std::array<unsigned char,5> nativeCode=Original;
@@ -190,10 +199,18 @@ void Fill(OFFSCREEN* off,RECT rectangle,unsigned char color) {
     for(int y=top;y<=bottom;++y) for(int x=left;x<=right;++x)
         static_cast<unsigned char*>(off->lpSurface)[static_cast<std::size_t>(y)*off->lPitch+x]=color;
 }
+void PaintBackground(OFFSCREEN* off,RECT rectangle,int originX,int originY) {
+    if(!texturedBackground){Fill(off,rectangle,BackgroundColor);return;}
+    for(int y=static_cast<int>(rectangle.top);y<=rectangle.bottom;++y)
+        for(int x=static_cast<int>(rectangle.left);x<=rectangle.right;++x){
+            const auto colour=static_cast<unsigned char>(100+(((x-originX)%frame.Width)*3+(y-originY)*5)%20);
+            Fill(off,{x,y,x,y},colour);
+        }
+}
 int CopyGafToContext(OFFSCREEN* off,GAFFrame* image,int x,int y) {
     ++backgroundCalls;
-    Fill(off,{x-image->xPosition,y-image->yPosition,x-image->xPosition+image->Width-1,
-        y-image->yPosition+image->Height-1},BackgroundColor);return 1;
+    const int left=x-image->xPosition,top=y-image->yPosition;
+    PaintBackground(off,{left,top,left+image->Width-1,top+image->Height-1},left,top);return 1;
 }
 int DrawTextInScreen(OFFSCREEN* off,char* text,int x,int y,int) {
     texts.push_back({text,x,y,off->ScreenRect,program.fontHandle});
@@ -206,9 +223,28 @@ int DrawTextInScreen(OFFSCREEN* off,char* text,int x,int y,int) {
 }
 void FakeNativeDraw(OFFSCREEN* off) {
     ++nativeCalls;
+    if(currentWorld){
+        nativeObservedUnit=currentWorld->MouseOverUnit;
+        nativeObservedButton=currentWorld->desktopGUI.field_68;
+        nativeCacheValues.push_back(Cache(currentWorld));
+    }
     if(nativeThrow) throw std::runtime_error("native exception must propagate");
-    if(currentWorld){nativeCacheValues.push_back(Cache(currentWorld));SetCache(currentWorld,123);}
-    Fill(off,{130,off->Height-32,off->Width-1,off->Height-1},NativeColor);
+    if(nativeHonorsCache&&currentWorld&&Cache(currentWorld)==123)return;
+    if(currentWorld)SetCache(currentWorld,123);
+    PaintBackground(off,{130,off->Height-32,off->Width-1,off->Height-1},129,off->Height-32);
+    // Native player colour, name/health, mission, metal/energy and target bars.
+    // They use distinct pixels so retaining only the title cannot pass this test.
+    Fill(off,{130,off->Height-29,145,off->Height-5},NativeColor);
+    Fill(off,{155,off->Height-27,210,off->Height-20},32);
+    Fill(off,{155,off->Height-16,210,off->Height-12},33);
+    Fill(off,{215,off->Height-28,230,off->Height-18},34);
+    Fill(off,{215,off->Height-12,240,off->Height-3},35);
+    Fill(off,{245,off->Height-20,nativeExtent,off->Height-18},36);
+    // Keep the right edge authoritative even with a compact custom native UI.
+    Fill(off,{nativeExtent,off->Height-4,nativeExtent,off->Height-4},37);
+    lastNativeExtent=nativeExtent;
+    const auto* start=static_cast<const unsigned char*>(off->lpSurface);
+    nativePixels.assign(start,start+static_cast<std::size_t>(off->Height)*off->lPitch);
 }
 void* GetCurrentProcess(){return nullptr;}
 BOOL ReadProcessMemory(void*,const void* address,void* output,SIZE_T size,SIZE_T* read) {
@@ -243,7 +279,7 @@ bool Read(TAdynmemStruct* ta,unsigned type,const UnitStruct* single,unsigned cou
 // PRODUCTION_SOURCE
 
 void ClearFrame(){
-    nativeCalls=dataCalls=backgroundCalls=0;texts.clear();nativeCacheValues.clear();
+    nativeCalls=dataCalls=backgroundCalls=0;texts.clear();nativeCacheValues.clear();nativePixels.clear();
     std::fill(pixels.begin(),pixels.end(),Clean);
 }
 void SetSurface(int width,int height=480,int pitch=0){
@@ -285,6 +321,7 @@ void Fixture(){
     LocalShare=&localShared;localShared.Dialog=&dialog;dialogShown=false;
     dataFail=dataThrow=paintThrow=nativeThrow=readFail=patchFail=constructorThrow=false;
     readCalls=failReadNumber=hookCreated=hookDestroyed=0;nativeCode=Original;
+    nativeExtent=310;nativeHonorsCache=texturedBackground=false;nativeObservedUnit=0;nativeObservedButton=-1;
     SetSurface(1200);SetCache(&world,123);ClearFrame();
 }
 void Select(unsigned slot,unsigned type=1){
@@ -302,6 +339,26 @@ void CheckGuards(int visibleWidth){
     for(int y=surface.Height-32;y<surface.Height;++y)for(int x=0;x<std::min(129,visibleWidth);++x)
         assert(pixels[Guard+static_cast<std::size_t>(y)*surface.lPitch+x]==Clean);
 }
+void CheckOnlyCurrentAppend(){
+    assert(!nativePixels.empty());
+    for(int y=surface.Height-32;y<surface.Height;++y)for(int x=130;x<surface.Width;++x){
+        const std::size_t offset=static_cast<std::size_t>(y)*surface.lPitch+x;
+        if(pixels[Guard+offset]==nativePixels[offset])continue;
+        bool glyph=false;
+        for(const auto& text:texts)
+            if(x>=text.x&&x<text.x+GetTextExtent(text.font,text.value.c_str())
+                &&y>=text.y&&y<text.y+text.font[0])glyph=true;
+        assert(glyph);
+    }
+}
+void CheckNativePixels(){
+    assert(!nativePixels.empty());
+    for(int y=surface.Height-32;y<surface.Height;++y)
+        for(int x=130;x<=std::min(lastNativeExtent,surface.Width-1);++x)
+            assert(pixels[Guard+static_cast<std::size_t>(y)*surface.lPitch+x]
+                ==nativePixels[static_cast<std::size_t>(y)*surface.lPitch+x]);
+    for(const auto& text:texts)assert(text.x>lastNativeExtent);
+}
 void CheckFont(){assert(program.fontHandle==oldFont&&program.fontFrontColour==7&&program.fontBackColour==8&&program.fontAlpha==9);}
 
 int main(){
@@ -312,19 +369,20 @@ int main(){
     Select(0);units[0].health=333;
     RECT originalClip={130,20,1199,479};surface.ScreenRect=originalClip;
     DrawPanel(&surface);
-    assert(nativeCalls==0&&dataCalls==1&&lastType==1&&lastCount==1&&lastSingle==units);
-    assert(TextContains("Flash")&&TextContains("333/1000")&&TextContains("Selected: 1"));
-    assert(TextContains("DPS~ 100")&&TextContains("Speed 30")&&TextContains("LOS 300"));
+    assert(nativeCalls==1&&dataCalls==1&&lastType==1&&lastCount==1&&lastSingle==units);
+    assert(!TextContains("Flash")&&TextContains("HP 333/1000")&&TextContains("Selected: 1"));
+    assert(TextContains("DPS~ 100")&&TextContains("Speed 30.0 m/s")&&TextContains("LOS 300"));
     for(const auto& text:texts)assert(text.font==sideFont);
+    assert(texts.front().value.find("Selected: 1")==0);CheckNativePixels();
     assert(SameRect(surface.ScreenRect,originalClip));CheckFont();CheckGuards(surface.Width);
 
     ClearFrame();Select(1);Select(2);DrawPanel(&surface);
-    assert(nativeCalls==0&&lastCount==3&&!lastSingle);
-    assert(TextContains("Flash x3 (each)")&&TextContains("Selected: 3")&&TextContains("DPS~ 100"));
+    assert(nativeCalls==1&&lastCount==3&&!lastSingle);
+    assert(TextContains("HP 1000 (each)")&&TextContains("Selected: 3")&&TextContains("DPS~ 100"));
     assert(!TextContains("DPS~ 300"));
     ClearFrame();Hover();DrawPanel(&surface);
-    assert(nativeCalls==0&&lastType==2&&lastCount==1&&!lastSingle);
-    assert(TextContains("Solar")&&TextContains("Selected: 3")&&!TextContains("Solar x3"));
+    assert(nativeCalls==1&&lastType==2&&lastCount==1&&!lastSingle);
+    assert(TextContains("HP 1200")&&TextContains("Selected: 3")&&!TextContains("Flash"));CheckNativePixels();
     ClearFrame();Hover(false);units[2].UnitSelected=0;DrawPanel(&surface);
     assert(lastCount==2&&TextContains("Selected: 2"));
 
@@ -335,11 +393,11 @@ int main(){
     assert(nativeCalls==1&&TextContains("Selected: 2")&&nativeCacheValues[0]==0xffffu);
     ClearFrame();for(auto& unit:units)unit.UnitSelected=0;DrawPanel(&surface);
     assert(nativeCalls==1&&dataCalls==0&&texts.empty()&&nativeCacheValues[0]==0xffffu);
-    assert(pixels[Guard+static_cast<std::size_t>(surface.Height-1)*surface.lPitch+140]==NativeColor);
+    assert(pixels[Guard+static_cast<std::size_t>(surface.Height-1)*surface.lPitch+140]==BackgroundColor);
 
     // Hover alone must not invent a selected unit or increment the total count.
     ClearFrame();Hover();DrawPanel(&surface);
-    assert(nativeCalls==0&&lastCount==1&&lastType==2&&!TextContains("Selected:"));
+    assert(nativeCalls==1&&lastCount==1&&lastType==2&&!TextContains("Selected:"));
     Hover(false);Select(0);Select(1);Select(2);
     // Foreign, dead, pending-death and inconsistent slots never inflate totals.
     units[1].Owner_PlayerPtr0=&world.Players[1];units[2].UnitSelected|=0x4000;
@@ -360,7 +418,7 @@ int main(){
     world.Players[0].My_PlayerType=2;ClearFrame();DrawPanel(&surface);
     assert(nativeCalls==1&&dataCalls==0&&texts.empty());world.Players[0].My_PlayerType=Player_LocalHuman;
 
-    // Native fallback happens exactly once even after a partially painted failure.
+    // Original native drawing happens exactly once, including backend/paint faults.
     dataFail=true;ClearFrame();DrawPanel(&surface);
     assert(nativeCalls==1&&dataCalls==1&&nativeCacheValues[0]==0xffffu);CheckFont();
     dataFail=false;dataThrow=true;ClearFrame();DrawPanel(&surface);
@@ -381,11 +439,11 @@ int main(){
 
     // Text uses pixel width (including variable-width glyphs), keeps its original
     // font/clip and never paints the sidebar, the playfield or pitch padding.
-    SetSurface(320);templates[1].name=std::string(300,'W');ClearFrame();DrawPanel(&surface);
+    SetSurface(320);nativeExtent=220;templates[1].name=std::string(300,'W');ClearFrame();DrawPanel(&surface);
     assert(TextContains("Selected: 1"));CheckFont();CheckGuards(320);
     for(const auto& text:texts)assert(GetTextExtent(text.font,text.value.c_str())<=text.clip.right-text.x);
-    SetSurface(1200);templates[1].name="Flash";
-    sideFont[0]=15;ClearFrame();DrawPanel(&surface);assert(nativeCalls==0);CheckFont();CheckGuards(1200);
+    SetSurface(1200);nativeExtent=310;templates[1].name="Flash";
+    sideFont[0]=15;ClearFrame();DrawPanel(&surface);assert(nativeCalls==1);CheckFont();CheckGuards(1200);
     sideFont[0]=16;ClearFrame();DrawPanel(&surface);assert(nativeCalls==1);CheckFont();sideFont[0]=8;
 
     // Megamap contexts can advertise pitch as Width and retain a battlefield
@@ -410,7 +468,7 @@ int main(){
     for(auto& unit:units)unit.Owner_PlayerPtr0=&currentWorld->Players[0];
     priorWorld.reset();templates[1].name="Next match Flash";
     ClearFrame();UnitStatsPanel::Draw(&surface);
-    assert(dataCalls==1&&lastWorld==currentWorld&&TextContains("Next match Flash"));
+    assert(dataCalls==1&&lastWorld==currentWorld&&TextContains("Selected: 1")&&!TextContains("Next match Flash"));
     currentWorld=&world;
     for(auto& unit:units)unit.Owner_PlayerPtr0=&world.Players[0];
     // Native exceptions must retain native behavior, not disappear inside SEH.
@@ -419,6 +477,73 @@ int main(){
     try{UnitStatsPanel::Draw(&surface);}catch(const std::runtime_error&){caught=true;}
     assert(caught&&nativeCalls==1);nativeThrow=false;
     UnitStatsPanel::Shutdown();assert(nativeCode==Original&&!g_enabled&&!g_hook);
+
+    // Native selected-unit information is used when there is no real hover.
+    // Only the renderer's input is borrowed, including groups of the same type;
+    // unit records, selection flags and the real GUI hover are left untouched.
+    Fixture();UnitStatsPanel::Install();Select(1);units[1].health=333;
+    world.desktopGUI.field_68=3;
+    const unsigned selection=units[1].UnitSelected;
+    DrawPanel(&surface);
+    assert(nativeCalls==1&&nativeObservedUnit==1&&nativeObservedButton==-1);
+    assert(world.MouseOverUnit==0&&world.desktopGUI.field_68==3);
+    assert(units[1].UnitSelected==selection&&TextContains("HP 333/1000"));
+    CheckNativePixels();CheckOnlyCurrentAppend();
+    // Compare with the matching textured GAF strip, including tile origin and
+    // row phase, rather than mistaking normal background pixels for native ink.
+    texturedBackground=true;ClearFrame();DrawPanel(&surface);
+    assert(texts.front().x==320&&TextContains("DPS~ 100"));
+    CheckNativePixels();CheckOnlyCurrentAppend();
+    ClearFrame();Select(2);DrawPanel(&surface);
+    assert(nativeObservedUnit==1&&lastCount==2&&!lastSingle&&TextContains("HP 1000 (each)"));
+    assert(world.MouseOverUnit==0&&world.desktopGUI.field_68==3);CheckNativePixels();
+    nativeThrow=true;ClearFrame();caught=false;
+    try{DrawPanel(&surface);}catch(const std::runtime_error&){caught=true;}
+    assert(caught&&nativeObservedUnit==1&&world.MouseOverUnit==0&&world.desktopGUI.field_68==3);
+    nativeThrow=false;
+
+    // A different real unit or a map feature keeps its original native details.
+    // The selected count still appears, without associating the group's stats
+    // with an unrelated hovered object.
+    units[2].UnitSelected=0;units[2].UnitID=2;units[2].UnitType=&definitions[2];
+    world.MouseOverUnit=2;ClearFrame();DrawPanel(&surface);
+    assert(nativeObservedUnit==2&&world.MouseOverUnit==2&&dataCalls==0);
+    assert(TextContains("Selected: 1")&&!TextContains("HP ")&&!TextContains("DPS"));
+    CheckNativePixels();CheckOnlyCurrentAppend();
+    world.MouseOverUnit=0;world.MouseOverFeature=7;ClearFrame();DrawPanel(&surface);
+    assert(nativeObservedUnit==0&&world.MouseOverFeature==7&&dataCalls==0);
+    assert(TextContains("Selected: 1")&&!TextContains("HP "));CheckNativePixels();
+
+    // Retain the framebuffer across frames like the real native cache does.
+    // Switching tooltip, native status/target widths, selections or overlays
+    // clears previous custom text through the original renderer, and moves all
+    // extra text after the new native ink without changing any native pixels.
+    world.MouseOverFeature=0xffff;nativeHonorsCache=true;
+    ClearFrame();DrawPanel(&surface);assert(TextContains("DPS~ 100"));
+    auto NextFrame=[](){nativeCalls=dataCalls=backgroundCalls=0;texts.clear();nativeCacheValues.clear();};
+    NextFrame();world.MouseOverFeature=8;DrawPanel(&surface);
+    assert(nativeCacheValues[0]==0xffff&&dataCalls==0&&TextContains("Selected: 1"));
+    CheckNativePixels();CheckOnlyCurrentAppend();
+    NextFrame();world.MouseOverFeature=0xffff;nativeExtent=650;DrawPanel(&surface);
+    assert(texts.front().x==660&&TextContains("DPS~ 100"));
+    CheckNativePixels();CheckOnlyCurrentAppend();
+    NextFrame();units[1].UnitSelected=0;DrawPanel(&surface);
+    assert(nativeCalls==1&&texts.empty()&&nativeCacheValues[0]==0xffff);
+    CheckNativePixels();CheckOnlyCurrentAppend();
+    NextFrame();Select(1);Select(2,2);nativeExtent=400;DrawPanel(&surface);
+    assert(dataCalls==0&&texts.front().x==410&&TextContains("Selected: 2"));
+    CheckNativePixels();CheckOnlyCurrentAppend();
+    NextFrame();dialogShown=true;DrawPanel(&surface);
+    assert(texts.empty()&&nativeCacheValues[0]==0xffff);CheckOnlyCurrentAppend();
+    dialogShown=false;
+
+    // Missing side assets and a full native status bar preserve every original
+    // pixel, even when no safe room remains to append a label.
+    NextFrame();nativeExtent=1195;DrawPanel(&surface);
+    assert(texts.empty());CheckNativePixels();CheckOnlyCurrentAppend();
+    NextFrame();nativeExtent=310;sequence.Frames=0;DrawPanel(&surface);
+    assert(texts.empty());CheckNativePixels();CheckOnlyCurrentAppend();
+    sequence.Frames=1;UnitStatsPanel::Shutdown();
 
     // Preflight failure changes no native bytes; failed write verification is
     // rolled back; allocation failure leaves the original call in place.

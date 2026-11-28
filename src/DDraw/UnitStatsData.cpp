@@ -95,8 +95,9 @@ namespace
             {
                 const WeaponStruct* weapon = weapons[i];
                 raw.weapons[i] = {};
-                // TA's unarmed slot points to an all-zero sentinel definition.
-                if (!weapon || !weapon->WeaponName[0]) continue;
+                // Absent slots point to weapon zero, which mods can name and
+                // give a range. Skip its identity, not legitimate zero-reload weapons.
+                if (!weapon || weapon == &ta->Weapons[0] || !weapon->WeaponName[0]) continue;
                 auto& out = raw.weapons[i];
                 out.damage = ValueAt<std::uint16_t>(weapon, 0xD4);
                 out.aoe = ValueAt<std::uint16_t>(weapon, 0xD6);

@@ -30,8 +30,12 @@ namespace
 int main()
 {
     assert(Speed(0) == 0);
-    assert(Speed(65536) == 30);
-    assert(Speed(32768) == 15);
+    assert(Speed(65536) == 12);
+    assert(Speed(32768) == 6);
+    // Native F1 help reports ESC Flash's MaxVelocity=2.15 as 25.8 m/s.
+    assert(Detail::SpeedNumber(Speed(140902)) == "25.8");
+    assert(Detail::SpeedNumber(Speed(35389)) == "6.5"); // native %.1f, not 6.48
+    assert(Detail::SpeedNumber(Speed(32768)) == "6.0");
     assert(std::isfinite(Speed(std::numeric_limits<std::uint32_t>::max())));
     assert(NominalDps(Gun(100, 30)) == 100);
     assert(NominalDps(Gun(100, 60, 3)) == 150); // exactly N shots, not N+1
@@ -50,7 +54,7 @@ int main()
     auto fields = Fields(stats);
     assert(Has(fields, "DPS~ 200"));
     assert(Has(fields, "Range 70000"));
-    assert(Has(fields, "Speed 30"));
+    assert(Has(fields, "Speed 12.0 m/s"));
     assert(Has(fields, "LOS 320"));
     assert(Title(stats) == "Flash | HP 150/70000 | M 112.5  E 1000");
     stats.count = 3;
@@ -123,7 +127,7 @@ int main()
     stats.speed = nan; stats.energyUse = -100;
     assert(Title(stats).find("M ?  E ?") != std::string::npos);
     fields = Fields(stats);
-    assert(Has(fields, "Speed ?") && Has(fields, "E use/s ?"));
+    assert(Has(fields, "Speed ? m/s") && Has(fields, "E use/s ?"));
     stats.energyMake = 1e300;
     fields = Fields(stats);
     assert(Has(fields, "+E/s 1.00e+300"));

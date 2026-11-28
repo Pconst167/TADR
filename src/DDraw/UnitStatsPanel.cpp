@@ -49,6 +49,8 @@ namespace
         unsigned targetCount = 0;
         unsigned type = 0;
         const UnitStruct* single = nullptr;
+        const UnitStruct* representative = nullptr;
+        bool buildHover = false;
         bool stats = false;
         bool allowed = false;
         int side = -1;
@@ -131,7 +133,12 @@ namespace
                 if (!OwnSelected(*unit,owner)) continue;
                 const unsigned type = static_cast<unsigned short>(unit->UnitID);
                 if (type >= ta->UNITINFOCount || unit->UnitType != &ta->UnitDef[type]) continue;
-                if (!request.selected) { request.type=type; request.single=unit; }
+                if (!request.selected)
+                {
+                    request.type=type;
+                    request.single=unit;
+                    request.representative=unit;
+                }
                 else if (request.type != type) sameType=false;
                 ++request.selected;
             }
@@ -154,12 +161,27 @@ namespace
             request.type=static_cast<unsigned>(hover);
             request.targetCount=1;
             request.single=nullptr;
+            request.representative=nullptr;
+            request.buildHover=true;
             request.stats=true;
         }
         else if (request.selected && sameType)
         {
             request.targetCount=request.selected;
             request.stats=true;
+            // A real hovered object keeps its native tooltip. Do not label
+            // an enemy/other unit's panel with the selected group's values.
+            if (ta->MouseOverUnit)
+            {
+                const std::uintptr_t first=reinterpret_cast<std::uintptr_t>(ta->BeginUnitsArray_p);
+                const std::uintptr_t address=first+static_cast<std::size_t>(ta->MouseOverUnit)*sizeof(UnitStruct);
+                const auto* hovered=reinterpret_cast<const UnitStruct*>(address);
+                if (!InBank(hovered,ta->BeginUnitsArray_p,ta->EndOfUnitsArray_p)
+                    || !OwnSelected(*hovered,owner)
+                    || static_cast<unsigned short>(hovered->UnitID) != request.type)
+                    request.stats=false;
+            }
+            else if (ta->MouseOverFeature != 0xffffu) request.stats=false;
         }
         return request;
     }
@@ -184,6 +206,56 @@ namespace
             }
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+
+    struct NativeSelection
+    {
+        TAdynmemStruct* world = nullptr;
+        unsigned short hovered = 0;
+        int button = -1;
+        bool changed = false;
+    };
+
+    NativeSelection PrepareNativeSelection(const Request& request)
+    {
+        NativeSelection saved;
+        __try
+        {
+            TAdynmemStruct* ta=request.world;
+            const UnitStruct* unit=request.representative;
+            if (!request.allowed || !request.stats || request.buildHover || !ta || !unit
+                || ta != *TAmainStruct_PtrPtr || ta->MouseOverUnit
+                || ta->MouseOverFeature != 0xffffu
+                || !InBank(unit,ta->BeginUnitsArray_p,ta->EndOfUnitsArray_p)
+                || !OwnSelected(*unit,&ta->Players[ta->LocalHumanPlayer_PlayerID])) return saved;
+            const std::uintptr_t index=(reinterpret_cast<std::uintptr_t>(unit)
+                -reinterpret_cast<std::uintptr_t>(ta->BeginUnitsArray_p))/sizeof(UnitStruct);
+            if (!index || index > 65535u) return saved;
+            saved.world=ta;
+            saved.hovered=ta->MouseOverUnit;
+            saved.button=ta->desktopGUI.field_68;
+            saved.changed=true;
+            // These two fields select only the local information renderer.
+            // No selection flag, unit record or order is changed.
+            ta->MouseOverUnit=static_cast<unsigned short>(index);
+            ta->desktopGUI.field_68=-1;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
+        return saved;
+    }
+
+    void DrawNativeSelected(OFFSCREEN* surface, const Request& request)
+    {
+        NativeSelection saved=PrepareNativeSelection(request);
+        __try { DrawNative(surface); }
+        __finally
+        {
+            if (saved.changed && saved.world == *TAmainStruct_PtrPtr)
+            {
+                saved.world->MouseOverUnit=saved.hovered;
+                saved.world->desktopGUI.field_68=saved.button;
+            }
+        }
     }
 
     struct FontState
@@ -219,18 +291,34 @@ namespace
         return true;
     }
 
-    std::string Fit(std::string text, void* font, int width)
+    int NativeRight(OFFSCREEN* surface, const Request& request)
     {
-        if (width <= 0) return std::string();
-        if (text.size() > 255) text.resize(255);
-        if (GetTextExtent(font,text.c_str()) <= width) return text;
-        while (!text.empty())
+        const int right=Right(*surface);
+        if (!surface->lpSurface || surface->Height < 32 || right < 130
+            || right >= 16384 || surface->lPitch < right+1) return right;
+        // Re-render only the native background into a private 32-pixel strip.
+        // Comparing actual ink also covers localized orders, variable-width
+        // numbers, colour/logo blocks, health/reload bars and target details.
+        // The original bar is never cleared or copied over by this feature.
+        std::vector<unsigned char> background(static_cast<std::size_t>(right+1)*32u,0);
+        OFFSCREEN scratch = {};
+        scratch.Width=right+1;
+        scratch.Height=32;
+        scratch.lPitch=right+1;
+        scratch.lpSurface=background.data();
+        scratch.ScreenRect={130,0,right,31};
+        if (!Background(&scratch,request.world,request.side,scratch.ScreenRect)) return right;
+        int occupied=129;
+        const auto* pixels=static_cast<const unsigned char*>(surface->lpSurface)
+            +static_cast<std::size_t>(surface->Height-32)*surface->lPitch;
+        for (int y=0; y<32; ++y)
         {
-            text.pop_back();
-            const std::string candidate=text+"...";
-            if (GetTextExtent(font,candidate.c_str()) <= width) return candidate;
+            const auto* actual=pixels+static_cast<std::size_t>(y)*surface->lPitch;
+            const auto* plain=background.data()+static_cast<std::size_t>(y)*(right+1);
+            for (int x=right; x>occupied; --x)
+                if (actual[x] != plain[x]) { occupied=x; break; }
         }
-        return std::string();
+        return occupied;
     }
 
     // All allocations and ordinary C++ exceptions stay in this helper, outside
@@ -243,7 +331,8 @@ namespace
             const auto& side=request.world->RaceSideDataAry[request.side];
             auto* font=reinterpret_cast<unsigned char*>(side.Font_File);
             if (!font || font[0] <= 0 || font[0] > 24) return false;
-            const int left=std::max(130,static_cast<int>(surface->ScreenRect.left));
+            const int left=std::max(std::max(130,static_cast<int>(surface->ScreenRect.left)),
+                NativeRight(surface,request)+10);
             const int right=Right(*surface)-3;
             const int top=surface->Height-32;
             if (right <= left || top < surface->ScreenRect.top) return false;
@@ -251,44 +340,60 @@ namespace
             program->fontHandle=font;
             program->fontFrontColour=0x53; // native side-panel text colour
             program->fontBackColour=program->fontAlpha;
-            char countText[40] = {};
-            if (request.selected) sprintf_s(countText,"Selected: %u",request.selected);
-            const int countWidth=countText[0] ? GetTextExtent(font,countText) : 0;
-            const int countX=right-countWidth;
             const int gap=1;
-            const int firstY=top+std::max(0,(32-(2*font[0]+gap))/2);
-
-            std::string title, fields;
-            if (statistics)
+            const bool twoRows=2*font[0]+gap <= 32;
+            const int firstY=top+std::max(0,(32-(twoRows ? 2*font[0]+gap : font[0]))/2);
+            std::vector<std::string> tokens;
+            if (request.selected)
             {
+                std::string count="Selected: "+std::to_string(request.selected);
+                if (GetTextExtent(font,count.c_str()) > right-left)
+                    count="Sel: "+std::to_string(request.selected);
+                if (GetTextExtent(font,count.c_str()) > right-left)
+                    count="#"+std::to_string(request.selected);
+                tokens.push_back(count);
+            }
+            if (statistics && twoRows)
+            {
+                // A failing stat snapshot must never hide the selection count
+                // or replace the information already drawn by the game.
                 UnitStatsCore::Stats stats;
-                if (2*font[0]+gap > 32 || !UnitStatsData::Read(request.world,request.type,
-                        request.single,request.targetCount,stats)) return false;
-                title=Fit(UnitStatsCore::Title(stats),font,right-left-(countWidth ? countWidth+12 : 0));
-                const auto tokens=UnitStatsCore::Fields(stats);
-                for (std::size_t i=0; i<tokens.size() && i<64; ++i)
+                bool read=false;
+                try { read=UnitStatsData::Read(request.world,request.type,
+                    request.single,request.targetCount,stats); }
+                catch (...) {}
+                if (read)
                 {
-                    if (tokens[i].size() > 255) continue;
-                    const std::string next=fields.empty() ? tokens[i] : fields+"   "+tokens[i];
-                    if (next.size() <= 255 && GetTextExtent(font,next.c_str()) <= right-left)
-                        fields=next;
+                    std::string hp="HP ";
+                    if (stats.liveHealth && stats.count == 1)
+                        hp+=std::to_string(stats.currentHealth)+"/";
+                    hp+=std::to_string(stats.maxHealth);
+                    if (stats.count > 1) hp+=" (each)";
+                    tokens.push_back(hp);
+                    const auto fields=UnitStatsCore::Fields(stats);
+                    tokens.insert(tokens.end(),fields.begin(),fields.end());
                 }
-                if (title.empty() || fields.empty() || !Background(surface,request.world,request.side,bar))
-                    return false;
-                surface->ScreenRect=bar;
-                DrawTextInScreen(surface,const_cast<char*>(title.c_str()),left,firstY,-1);
-                DrawTextInScreen(surface,const_cast<char*>(fields.c_str()),left,firstY+font[0]+gap,-1);
             }
-            else if (request.selected)
+            std::string rows[2];
+            int row=0;
+            for (std::size_t i=0; i<tokens.size() && i<64; ++i)
             {
-                RECT countClip=bar;
-                countClip.left=std::max(left,countX-4);
-                if (countX < left || !Background(surface,request.world,request.side,countClip)) return false;
-                surface->ScreenRect=countClip;
+                const auto& token=tokens[i];
+                if (token.size() > 255 || GetTextExtent(font,token.c_str()) > right-left) continue;
+                std::string next=rows[row].empty() ? token : rows[row]+"   "+token;
+                if (next.size() > 255 || GetTextExtent(font,next.c_str()) > right-left)
+                {
+                    if (row || !twoRows) continue;
+                    row=1;
+                    next=token;
+                }
+                rows[row]=next;
             }
-            if (countText[0] && countX >= left)
-                DrawTextInScreen(surface,countText,countX,firstY,-1);
-            return true;
+            surface->ScreenRect=bar;
+            for (int i=0; i<2; ++i)
+                if (!rows[i].empty()) DrawTextInScreen(surface,const_cast<char*>(rows[i].c_str()),
+                    left,firstY+i*(font[0]+gap),-1);
+            return !rows[0].empty() || !rows[1].empty();
         }
         catch (...) { return false; }
     }
@@ -330,21 +435,14 @@ namespace
     void __stdcall DrawPanel(OFFSCREEN* surface)
     {
         const Request request=ResolveSafe();
-        const bool attempted=request.allowed && request.stats;
-        if (attempted && PaintSafe(surface,request,true))
-        {
-            g_customDisplayed=true;
-            g_lastCount=request.selected;
-            return;
-        }
-        // Deselecting or leaving the custom branch must replace old glyphs even
-        // when the native hover snapshot itself did not change.
-        if (attempted || g_customDisplayed || g_lastCount != request.selected) DirtyNativeCache();
-        DrawNative(surface);
-        g_customDisplayed=false;
+        const bool append=request.allowed && (request.stats || request.selected);
+        // The native renderer clears its own bar before drawing all original
+        // details. Invalidate its local presentation cache while appending so
+        // text from the previous frame cannot be mistaken for native ink.
+        if (append || g_customDisplayed || g_lastCount != request.selected) DirtyNativeCache();
+        DrawNativeSelected(surface,request);
+        g_customDisplayed=append && PaintSafe(surface,request,request.stats);
         g_lastCount=request.selected;
-        if (request.allowed && request.selected && PaintSafe(surface,request,false))
-            g_customDisplayed=true;
     }
 
     bool ReadBytes(unsigned address, void* output, std::size_t size)
@@ -408,7 +506,7 @@ namespace UnitStatsPanel
             }
         }
         catch (...) { g_hook.reset(); g_enabled=false; return; }
-        IDDrawSurface::OutptTxt("[UnitStatsPanel] build=bottom-bar-v1");
+        IDDrawSurface::OutptTxt("[UnitStatsPanel] build=bottom-bar-v2");
     }
 
     void Shutdown()
