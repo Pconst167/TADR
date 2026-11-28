@@ -248,6 +248,12 @@
     <ClCompile Include="ReloadBars.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UnitStatsPanel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UnitStatsData.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="HealthBarColors.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -662,6 +668,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ReloadBars.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UnitStatsPanel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UnitStatsData.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UnitStatsCore.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="HealthBarColors.h">

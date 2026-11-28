@@ -1,5 +1,10 @@
 #pragma once
 
+// Extended native bottom-bar unit statistics and selection count.
+#ifndef UNIT_STATS_PANEL_ENABLE
+#define UNIT_STATS_PANEL_ENABLE 0
+#endif
+
 // Ctrl+Shift queue prepending. Explicit per-mod build choice.
 #ifndef PREPEND_ORDERS_ENABLE
 #define PREPEND_ORDERS_ENABLE 0

@@ -1,0 +1,67 @@
+name: Test native unit statistics
+on:
+  push:
+    branches: ['feature/unit-statistics-test']
+permissions:
+  contents: read
+jobs:
+  behavior:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stats calculations and native data snapshots
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g src/DDraw/test/unit_stats_core_test.cpp -o /tmp/unit-stats-core
+          /tmp/unit-stats-core
+          python3 src/DDraw/test/unit_stats_data_test.py
+      - name: Native panel, counts and existing controls
+        run: |
+          python3 src/DDraw/test/unit_stats_panel_test.py
+          python3 src/DDraw/test/optional_unit_controls_test.py
+          python3 src/DDraw/test/grid_building_switch_test.py
+          python3 src/DDraw/test/prepend_orders_adapter_test.py
+          python3 src/DDraw/test/mex_upgrade_menu_io_test.py
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: escalation, mod: ESCALATION, stats: 1, formations: 1, mex: 1, grid: 1, prepend: 1, cursors: 1}
+          - {name: prota, mod: PROTA, stats: 1, formations: 1, mex: 0, grid: 1, prepend: 1, cursors: 0}
+          - {name: escalation-disabled, mod: ESCALATION, stats: 0, formations: 1, mex: 1, grid: 1, prepend: 1, cursors: 1}
+          - {name: ota-disabled, mod: OTA, stats: 0, formations: 0, mex: 0, grid: 0, prepend: 0, cursors: 0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_x86
+      - name: Compile selected mod profile
+        shell: pwsh
+        run: |
+          if ('${{ matrix.name }}' -eq 'escalation-disabled') {
+            python -c "from pathlib import Path; p=Path('src/DDraw/config_escalation.h'); b=p.read_bytes(); old=b'#define UNIT_STATS_PANEL_ENABLE 1'; assert b.count(old)==1; p.write_bytes(b.replace(old,b'#define UNIT_STATS_PANEL_ENABLE 0'))"
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to select disabled test profile' }
+          }
+          msbuild src/DDraw/ddraw.vcxproj /p:Configuration=ReleasePublic /p:Platform=Win32 /p:TDRAW_CONFIG=TDRAW_CONFIG_${{ matrix.mod }}
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Verify exact release features and Windows 7 imports
+        shell: pwsh
+        run: |
+          python src/DDraw/test/verify_unit_stats.py src/DDraw/Public/tdraw.dll --enabled ${{ matrix.stats }}
+          if ($LASTEXITCODE -ne 0) { throw 'Statistics verification failed' }
+          python src/DDraw/test/verify_optional_unit_controls.py src/DDraw/Public/tdraw.dll --formations ${{ matrix.formations }} --mex ${{ matrix.mex }} --grid ${{ matrix.grid }}
+          if ($LASTEXITCODE -ne 0) { throw 'Existing controls verification failed' }
+          python src/DDraw/test/verify_prepend_orders.py src/DDraw/Public/tdraw.dll --enabled ${{ matrix.prepend }}
+          if ($LASTEXITCODE -ne 0) { throw 'Queue prepend verification failed' }
+          python src/DDraw/test/verify_allied_cursors.py src/DDraw/Public/tdraw.dll --enabled ${{ matrix.cursors }}
+          if ($LASTEXITCODE -ne 0) { throw 'Allied cursor verification failed' }
+          python src/DDraw/tools/check_win7_imports.py src/DDraw/Public/tdraw.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Windows 7 imports failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unit-statistics-${{ matrix.name }}
+          path: |
+            src/DDraw/Public/tdraw.dll
+            src/DDraw/Public/tdraw.map
+            src/DDraw/Public/tdraw.pdb
