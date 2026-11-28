@@ -1,0 +1,59 @@
+name: Test lab build cycles
+on:
+  push:
+    branches: ['feature/lab-build-cycles', 'feature/lab-build-cycles-test']
+permissions:
+  contents: read
+jobs:
+  behavior:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Native production queue and native menu
+        run: |
+          python3 src/DDraw/test/lab_build_cycles_test.py
+          python3 src/DDraw/test/lab_build_cycles_menu_test.py
+      - name: Evaluate mod configurations
+        run: python3 src/DDraw/tools/config_table.py --markdown
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: escalation, mod: ESCALATION, cycles: 1}
+          - {name: prota, mod: PROTA, cycles: 1}
+          - {name: escalation-disabled, mod: ESCALATION, cycles: 0}
+          - {name: ota-disabled, mod: OTA, cycles: 0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_x86
+      - name: Compile selected mod profile
+        shell: pwsh
+        run: |
+          if ('${{ matrix.name }}' -eq 'escalation-disabled') {
+            python -c "from pathlib import Path; p=Path('src/DDraw/config_escalation.h'); b=p.read_bytes(); old=b'#define LAB_BUILD_CYCLES_ENABLE 1'; assert b.count(old)==1; p.write_bytes(b.replace(old,b'#define LAB_BUILD_CYCLES_ENABLE 0'))"
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to select disabled profile' }
+          }
+          msbuild src/DDraw/ddraw.vcxproj /p:Configuration=ReleasePublic /p:Platform=Win32 /p:TDRAW_CONFIG=TDRAW_CONFIG_${{ matrix.mod }}
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Verify features and Windows 7 imports
+        shell: pwsh
+        run: |
+          python src/DDraw/test/verify_lab_build_cycles.py src/DDraw/Public/tdraw.dll --enabled ${{ matrix.cycles }}
+          if ($LASTEXITCODE -ne 0) { throw 'Cycle feature verification failed' }
+          python src/DDraw/tools/check_win7_imports.py src/DDraw/Public/tdraw.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Windows 7 imports failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lab-build-cycles-${{ matrix.name }}
+          path: |
+            src/DDraw/Public/tdraw.dll
+            src/DDraw/Public/tdraw.map
+            src/DDraw/Public/tdraw.pdb

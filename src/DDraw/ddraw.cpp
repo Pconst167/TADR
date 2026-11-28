@@ -52,6 +52,7 @@ using namespace std;
 #include "WeaponFiredExt.h"
 #include "UnitIdentity.h"
 #include "ReloadBars.h"
+#include "LabBuildCycles.h"
 #include "HealthBarColors.h"
 #include "NanoframeNoLos.h"
 #include "UnitStatusCounters.h"
@@ -274,6 +275,7 @@ bool APIENTRY DllMain(HINSTANCE hinst, unsigned long reason, void*)
 #endif
 		UnitStatusCounters::Install();
 		ReloadBars::Install();
+		LabBuildCycles::Install();
 #if HEALTH_BAR_COLORS_ENABLE
 		HealthBarColors::Install();          // own bytes only: the 5-byte entry of Unit_DrawHealthBar 0x46A430 (ReloadBars and UnitStatusCounters hook its caller, 0x469CB1 / 0x469CF9)
 #endif
@@ -343,6 +345,7 @@ bool APIENTRY DllMain(HINSTANCE hinst, unsigned long reason, void*)
 #if NANOFRAME_NO_LOS_ENABLE
 		NanoframeNoLos::Shutdown();
 #endif
+		LabBuildCycles::Shutdown();
 		ReloadBars::Shutdown();
 		UnitStatusCounters::Shutdown();
 #if ALLIED_BUILD_QUEUE_ENABLE

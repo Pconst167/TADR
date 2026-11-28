@@ -39,6 +39,12 @@
 #include "config_twilight.h"
 #endif
 
+#ifndef LAB_BUILD_CYCLES_ENABLE
+#error "Each mod config must define LAB_BUILD_CYCLES_ENABLE"
+#elif LAB_BUILD_CYCLES_ENABLE != 0 && LAB_BUILD_CYCLES_ENABLE != 1
+#error "LAB_BUILD_CYCLES_ENABLE must be 0 or 1"
+#endif
+
 // Keep looping menu audio in TA's tracked sound slots. Override per config if needed.
 #ifndef MENU_HUM_TRACKED_LOOPING
 #define MENU_HUM_TRACKED_LOOPING 1

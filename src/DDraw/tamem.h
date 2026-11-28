@@ -1167,7 +1167,8 @@ struct UnitOrdersStruct {
   short RemeberX;                    // 0x32
   short RemeberY;                    // 0x34
   unsigned int BuildUnitID;          // 0x36
-  char data4[8];                     // 0x3A
+  int BuildCount;                    // 0x3A: remaining factory batch; generic parameter for other orders
+  char data4[4];                     // 0x3E
   unsigned int Order_State;          // 0x42		// 0x40000: background order
   unsigned int StartTime;            // 0x46
   UnitOrdersStruct* NextOrder;       // 0x4A
@@ -1355,7 +1356,8 @@ typedef struct _GUI1IDControl
 	char fontnumber;
 	char active;
 	char commonattribs;
-	char gap_2B[8];
+	unsigned int GadgetArchive; // 0x2B: native owned GAF archive, if any
+	unsigned int GadgetGaf;     // 0x2F: borrowed native GAF sequence address
 	char help[128];
 	char gap_B3[1];
 	__int16 gaffile;
@@ -1393,7 +1395,8 @@ typedef struct _GUI0IDControl
 	char fontnumber;
 	char active;
 	char commonattribs;
-	char field_2B[8];
+	unsigned int GadgetArchive; // 0x2B: native owned GAF archive, if any
+	unsigned int GadgetGaf;     // 0x2F: borrowed native GAF sequence address
 	char help[128];
 	char gap_B3[1];
 	__int16 gaffile;

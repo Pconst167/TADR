@@ -67,6 +67,8 @@
     <ClCompile Include="UnitIcon.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="LabBuildCycles.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="LabBuildCycleMenu.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="ddraw.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -432,6 +434,9 @@
     <ClInclude Include="commanderwarp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="LabBuildCycles.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="LabBuildCycleMenu.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="LabBuildCycleArt.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="ddraw.h">
       <Filter>Header Files</Filter>
     </ClInclude>

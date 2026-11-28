@@ -185,3 +185,6 @@
 // A unit under construction gives no sight, mapping or death eye until it completes (simulation
 // change: automatic targeting reads the owner's sight); see NanoframeNoLos.h.
 #define NANOFRAME_NO_LOS_ENABLE 0
+
+// Optional native factory queue repeat button; starts off for each lab.
+#define LAB_BUILD_CYCLES_ENABLE 0
